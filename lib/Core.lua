@@ -158,7 +158,18 @@ function Core.parse(data, limits)
     end
     local scale = ticksPerSecond and 1 / ticksPerSecond or tempo / 1000000 / division
     return { format = format, division = division, tracks = tracks, events = events, tempos = tempos,
+        timing = ticksPerSecond and "SMPTE" or "PPQN", hasTempo = #tempos > 1,
         duration = seconds + (lastTick - previousTick) * scale, eventCount = parsedCount }
+end
+
+function Core.tempoAt(song, seconds)
+    local low, high, selected = 1, #song.tempos, 1
+    while low <= high do
+        local middle = math.floor((low + high) / 2)
+        if song.tempos[middle].time <= seconds then selected = middle; low = middle + 1
+        else high = middle - 1 end
+    end
+    return song.tempos[selected].bpm
 end
 
 function Core.decodeBase64(text)

@@ -1,4 +1,4 @@
--- MIDI++ Luau 1.0.1
+-- MIDI++ Luau 1.0.2
 -- SPDX-License-Identifier: GPL-3.0-only
 -- Piano layouts and velocity curves adapted from Zephkek/MIDIPlusPlus.
 -- https://github.com/Zephkek/MIDIPlusPlus
@@ -169,7 +169,18 @@ function Core.parse(data, limits)
     end
     local scale = ticksPerSecond and 1 / ticksPerSecond or tempo / 1000000 / division
     return { format = format, division = division, tracks = tracks, events = events, tempos = tempos,
+        timing = ticksPerSecond and "SMPTE" or "PPQN", hasTempo = #tempos > 1,
         duration = seconds + (lastTick - previousTick) * scale, eventCount = parsedCount }
+end
+
+function Core.tempoAt(song, seconds)
+    local low, high, selected = 1, #song.tempos, 1
+    while low <= high do
+        local middle = math.floor((low + high) / 2)
+        if song.tempos[middle].time <= seconds then selected = middle; low = middle + 1
+        else high = middle - 1 end
+    end
+    return song.tempos[selected].bpm
 end
 
 function Core.decodeBase64(text)
@@ -435,36 +446,68 @@ if type(previous) == "table" and type(previous.Destroy) == "function" then pcall
 local function finite(value) return type(value) == "number" and value == value and math.abs(value) < math.huge end
 local function trim(value) return value:match("^%s*(.-)%s*$") end
 local function bool(value, default) if type(value) == "boolean" then return value end; return default end
+local function windowFocused()
+    if type(isrbxactive) == "function" then
+        local ok, active = pcall(isrbxactive)
+        if ok and type(active) == "boolean" then return active end
+    end
+    return true
+end
 
 -- Executors disagree about input APIs. All availability checks are local; no
 -- executor name/version is treated as a guarantee that key injection works.
-local virtualInput
-pcall(function() virtualInput = game:GetService("VirtualInputManager") end)
+local virtualInput, virtualInputService, ownedVirtualInput
+pcall(function() virtualInputService = game:GetService("VirtualInputManager") end)
+-- Xeno wraps `game` in a proxy. Native engine methods need a real Instance.
+local inputTarget = Workspace.Parent or Workspace
+pcall(function() ownedVirtualInput = Instance.new("VirtualInputManager") end)
+virtualInput = ownedVirtualInput or virtualInputService
 local nativeAvailable = type(keypress) == "function" and type(keyrelease) == "function"
-local backend = { name = "Unavailable", used = false }
+local backend = { name = "Unavailable", used = false, mode = "Auto", sentDown = 0, sentUp = 0 }
 local requestedBackend = Config.Backend or "Auto"
-if type(Config.SendKey) == "function" then backend.name = "Custom"
-elseif requestedBackend == "Executor" and nativeAvailable then backend.name = "Executor"
-elseif requestedBackend == "VirtualInput" and virtualInput then backend.name = "VirtualInput"
-elseif requestedBackend == "Auto" then
-    if nativeAvailable then backend.name = "Executor"
-    elseif virtualInput then backend.name = "VirtualInput" end
+local executorName = ""
+if type(identifyexecutor) == "function" then
+    local ok, name = pcall(identifyexecutor)
+    if ok then executorName = tostring(name):lower() end
+end
+function backend:select(mode)
+    self.mode, self.used, self.name = mode, false, "Unavailable"
+    if mode == "Custom" and type(Config.SendKey) == "function" then self.name = "Custom"
+    elseif mode == "Executor" and nativeAvailable then self.name = "Executor"
+    elseif mode == "VirtualInput" and virtualInput then self.name = "VirtualInput"
+    elseif mode == "VirtualInputService" and virtualInputService then self.name = "VirtualInputService"
+    elseif mode == "Auto" then
+        if executorName:find("xeno", 1, true) and virtualInput then self.name = "VirtualInput"
+        elseif nativeAvailable then self.name = "Executor"
+        elseif virtualInput then self.name = "VirtualInput" end
+    end
+    return self.name ~= "Unavailable"
+end
+backend:select(type(Config.SendKey) == "function" and "Custom" or requestedBackend)
+function backend:sendVirtual(info, down)
+    local device = self.name == "VirtualInputService" and virtualInputService or virtualInput
+    local ok, err = pcall(function() device:SendKeyEvent(down, info.code, false, inputTarget) end)
+    if not ok and self.mode == "Auto" and not self.used and device ~= virtualInputService and virtualInputService then
+        self.name = "VirtualInputService"
+        virtualInputService:SendKeyEvent(down, info.code, false, inputTarget)
+    elseif not ok then error("Virtual input failed: " .. tostring(err), 0) end
 end
 function backend:send(info, down)
     if self.name == "Custom" then
         Config.SendKey(info.code, down, info.vk)
     elseif self.name == "Executor" then
         local ok, err = pcall(down and keypress or keyrelease, info.vk)
-        if not ok and requestedBackend == "Auto" and not self.used and virtualInput then
+        if not ok and self.mode == "Auto" and not self.used and virtualInput then
             self.name = "VirtualInput"
-            virtualInput:SendKeyEvent(down, info.code, false, game)
+            self:sendVirtual(info, down)
         elseif not ok then error("Executor input failed: " .. tostring(err), 0) end
-    elseif self.name == "VirtualInput" then
-        virtualInput:SendKeyEvent(down, info.code, false, game)
+    elseif self.name == "VirtualInput" or self.name == "VirtualInputService" then
+        self:sendVirtual(info, down)
     else
         error("No input backend. Use an executor with keypress/keyrelease or permitted VirtualInputManager access.", 0)
     end
     self.used = true
+    if down then self.sentDown = self.sentDown + 1 else self.sentUp = self.sentUp + 1 end
 end
 
 local digits = { ["0"] = "Zero", ["1"] = "One", ["2"] = "Two", ["3"] = "Three", ["4"] = "Four",
@@ -605,6 +648,7 @@ end
 applyMap()
 
 local alive, loadVersion, playVersion, pendingPlay = true, 0, 0, false
+local inputProbe
 local connections, rowConnections = {}, {}
 local function connect(signal, callback, bucket)
     local connection = signal:Connect(callback)
@@ -684,7 +728,7 @@ end
 
 local header = make("Frame", {Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1, Active = true}, window)
 label(header, "MIDI++", 22, 10, 140, 25, 23, colors.accent).Font = Enum.Font.GothamBold
-label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.1", 23, 37, 360, 16, 10, colors.muted)
+label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.2", 23, 37, 360, 16, 10, colors.muted)
 local minimize = button(header, "_", 548, 16, 30, 30)
 local close = button(header, "X", 586, 16, 30, 30)
 local body = make("Frame", {Position = UDim2.fromOffset(0, 62), Size = UDim2.fromOffset(640, 580), BackgroundTransparency = 1}, window)
@@ -707,8 +751,9 @@ local panicButton = button(body, "Panic / F4", 498, 167, 118, 34)
 local seekBar = button(body, "", 22, 216, 594, 10)
 local seekFill = make("Frame", {Size = UDim2.fromScale(0, 1), BackgroundColor3 = colors.accent, BorderSizePixel = 0}, seekBar)
 round(seekFill, 5)
-local timeLabel = label(body, "0:00 / 0:00", 22, 231, 240, 20, 12, colors.muted)
-local activityLabel = label(body, "", 280, 231, 336, 20, 11, colors.muted)
+local timeLabel = label(body, "0:00 / 0:00", 22, 231, 142, 20, 12, colors.muted)
+local tempoLabel = label(body, "Tempo: -- BPM", 170, 231, 158, 20, 11, colors.accent)
+local activityLabel = label(body, "", 334, 231, 282, 20, 10, colors.muted)
 activityLabel.TextXAlignment = Enum.TextXAlignment.Right
 
 label(body, "SPEED", 22, 264, 64, 28, 11, colors.muted)
@@ -743,7 +788,8 @@ toggle("Sustain", 22, 345, function() return player.sustain end, function(value)
 toggle("Velocity / Alt", 222, 345, function() return Keyboard.velocity end, function(value) Keyboard.velocity = value end)
 toggle("Loop", 422, 345, function() return player.looped end, function(value) player.looped = value end)
 local curveButton = button(body, "Curve: " .. Keyboard.curveName, 22, 385, 192, 28)
-label(body, "Velocity / 88 keys require matching piano controls.", 222, 386, 394, 26, 10, colors.muted)
+local inputButton = button(body, "Input: " .. backend.mode, 222, 385, 192, 28)
+local testInputButton = button(body, "Test keys", 422, 385, 192, 28)
 label(body, "TRACKS", 22, 427, 180, 20, 11, colors.muted)
 local resetTracks = button(body, "Reset tracks", 500, 422, 116, 25)
 local tracksFrame = make("ScrollingFrame", {Position = UDim2.fromOffset(22, 455), Size = UDim2.fromOffset(594, 70),
@@ -762,6 +808,10 @@ end
 local function cancelStart()
     playVersion = playVersion + 1
     pendingPlay = false
+    if inputProbe and inputProbe.running then
+        inputProbe.running, inputProbe.cancelled = false, true
+        Keyboard:panic()
+    end
 end
 fail = function(err)
     cancelStart()
@@ -784,6 +834,10 @@ end
 local function formatTime(seconds)
     local whole = math.floor(math.max(0, seconds))
     return string.format("%d:%02d", math.floor(whole / 60), whole % 60)
+end
+local function bpmNow()
+    if not player.song or player.song.timing == "SMPTE" then return nil end
+    return Core.tempoAt(player.song, player.position)
 end
 local function refreshTracks()
     disconnectAll(rowConnections)
@@ -934,6 +988,7 @@ local function startOrPause()
     task.delay(delay, safely(function()
         if version ~= playVersion or not pendingPlay then return end
         pendingPlay = false
+        if not windowFocused() then status("Focus the Roblox game window, then press F6 to play.", true); return end
         if UserInputService:GetFocusedTextBox() then status("Close the text box before playing.", true); return end
         local ok, message = player:play()
         status(ok and ("Playing / " .. backend.name) or message, not ok)
@@ -942,6 +997,82 @@ end
 local function stopPlayback()
     cancelStart(); player:stop(); status("Stopped. All piano keys released.")
 end
+local function setBackend(mode)
+    cancelStart()
+    local paused, pauseError = pcall(function() player:pause() end)
+    if not paused then player.playing, player.outputActive = false, false; Keyboard:panic(); warn(pauseError) end
+    local available = backend:select(mode)
+    inputButton.Text = "Input: " .. mode
+    status(available and ("Input: " .. backend.name .. ". Click Test keys with Roblox focused.")
+        or ("Input mode is unavailable: " .. mode), not available)
+    return available
+end
+local inputModes = {"Auto"}
+if virtualInput then inputModes[#inputModes + 1] = "VirtualInput" end
+if nativeAvailable then inputModes[#inputModes + 1] = "Executor" end
+if virtualInputService then inputModes[#inputModes + 1] = "VirtualInputService" end
+if type(Config.SendKey) == "function" then inputModes[#inputModes + 1] = "Custom" end
+connect(inputButton.Activated, safely(function()
+    local index = table.find(inputModes, backend.mode) or 1
+    setBackend(inputModes[index % #inputModes + 1])
+end))
+
+local function testInput()
+    closeFileList()
+    cancelStart()
+    player:pause()
+    if backend.name == "Unavailable" then status("No keyboard input backend is available.", true); return end
+    local focused = UserInputService:GetFocusedTextBox()
+    if focused then focused:ReleaseFocus() end
+    local probe = {running = true, cancelled = false, observed = {}, expected = {}, sent = 0,
+        received = 0, processed = 0, backend = backend.name}
+    inputProbe = probe
+    status("Test starts in 1.5s: focus Roblox's piano. It will play T, U, O.")
+    local keys = {"t", "u", "o"}
+    local function current() return alive and inputProbe == probe and probe.running end
+    local function playOne(index)
+        if not current() then return end
+        if not windowFocused() then
+            cancelStart(); status("Test cancelled: focus Roblox and click Test keys again.", true); return
+        end
+        if UserInputService:GetFocusedTextBox() then
+            cancelStart(); status("Test cancelled: close the text box and try again.", true); return
+        end
+        local info = describeKey(keys[index])
+        probe.expected[info.code] = true
+        Keyboard:key(info, true)
+        probe.sent = probe.sent + 1
+        task.delay(0.18, safely(function()
+            if not current() then return end
+            Keyboard:key(info, false)
+            if index < #keys then
+                task.delay(0.12, safely(function() playOne(index + 1) end))
+            else
+                task.delay(0.15, safely(function()
+                    if not current() then return end
+                    probe.running = false
+                    Keyboard:panic()
+                    if probe.received > 0 then
+                        status(string.format("Test: %d/3 keys reached Roblox (%d consumed by UI). If silent, check piano focus/controls.",
+                            probe.received, probe.processed))
+                    else
+                        status("Test: 3 keys sent; Roblox received none. Change Input and test again.", true)
+                    end
+                end))
+            end
+        end))
+    end
+    task.delay(1.5, safely(function() playOne(1) end))
+end
+connect(UserInputService.InputBegan, function(input, processed)
+    local probe = inputProbe
+    if probe and probe.running and probe.expected[input.KeyCode] and not probe.observed[input.KeyCode] then
+        probe.observed[input.KeyCode] = true
+        probe.received = probe.received + 1
+        if processed then probe.processed = probe.processed + 1 end
+    end
+end)
+connect(testInputButton.Activated, safely(testInput))
 connect(playButton.Activated, safely(startOrPause))
 connect(stopButton.Activated, safely(stopPlayback))
 connect(panicButton.Activated, safely(stopPlayback))
@@ -1026,7 +1157,7 @@ if bool(Config.Hotkeys, true) then
     end))
 end
 
-local api = { Version = "1.0.1", InputBackend = function() return backend.name end }
+local api = { Version = "1.0.2", InputBackend = function() return backend.name end }
 function api:Destroy()
     if not alive then return end
     cancelStart()
@@ -1035,12 +1166,15 @@ function api:Destroy()
     Keyboard:panic()
     disconnectAll(connections)
     disconnectAll(rowConnections)
+    if ownedVirtualInput then pcall(function() ownedVirtualInput:Destroy() end) end
     if gui.Parent then gui:Destroy() end
     if environment.MIDIPlusPlus == self then environment.MIDIPlusPlus = nil end
 end
 function api:Play() if alive and not player.playing and not pendingPlay then startOrPause() end end
 function api:Pause() if alive then cancelStart(); player:pause(); status("Paused.") end end
 function api:Stop() if alive then stopPlayback() end end
+function api:SetBackend(mode) assert(alive, "Player was destroyed"); return setBackend(mode) end
+function api:TestInput() assert(alive, "Player was destroyed"); testInput() end
 function api:Seek(seconds) assert(alive and finite(seconds), "Seek expects a finite number"); player:seek(seconds) end
 function api:SetSpeed(speed) assert(alive, "Player was destroyed"); setSpeed(speed) end
 function api:SetTranspose(semitones) assert(alive, "Player was destroyed"); setTranspose(semitones) end
@@ -1061,10 +1195,15 @@ function api:SetTrack(index, muted, solo)
     player:refresh(); refreshTracks()
 end
 function api:Status()
+    local midiBpm = bpmNow()
     return { playing = player.playing, pending = pendingPlay, position = player.position,
         duration = player.song and player.song.duration or 0, backend = backend.name,
         speed = player.speed, transpose = player.transpose, skippedNotes = player.skipped, resyncs = player.resyncs,
-        source = loadedSource and loadedSource.path or nil, binarySafe = loadedSource and loadedSource.binarySafe or false }
+        source = loadedSource and loadedSource.path or nil, binarySafe = loadedSource and loadedSource.binarySafe or false,
+        midiBpm = midiBpm, bpm = midiBpm and midiBpm * player.speed or nil, inputMode = backend.mode,
+        sentDown = backend.sentDown, sentUp = backend.sentUp,
+        inputTest = inputProbe and {running = inputProbe.running, cancelled = inputProbe.cancelled,
+            sent = inputProbe.sent, received = inputProbe.received, processed = inputProbe.processed, backend = inputProbe.backend} or nil }
 end
 environment.MIDIPlusPlus = api
 connect(close.Activated, function() api:Destroy() end)
@@ -1082,6 +1221,10 @@ connect(RunService.Heartbeat, safely(function(delta)
     local duration = player.song and player.song.duration or 0
     seekFill.Size = UDim2.fromScale(duration > 0 and player.position / duration or 0, 1)
     timeLabel.Text = formatTime(player.position) .. " / " .. formatTime(duration)
+    local midiBpm = bpmNow()
+    tempoLabel.Text = midiBpm and string.format("Tempo: %.1f BPM", midiBpm * player.speed)
+        or player.song and "Timing: SMPTE" or "Tempo: -- BPM"
+    testInputButton.Text = inputProbe and inputProbe.running and "Testing..." or "Test keys"
     local active = 0
     for _ in pairs(player.voices) do active = active + 1 end
     activityLabel.Text = string.format("%d held  /  %d out of range  /  %s", active, player.skipped, backend.name)

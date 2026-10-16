@@ -7,7 +7,7 @@ A Roblox Luau MIDI piano player inspired by [Zephkek/MIDIPlusPlus](https://githu
 Paste this into Xeno's script editor and execute it in Roblox:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/Cybersize/MIDIPlusPlus-Luau/main/MIDIPlusPlus.lua?v=1.0.1"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Cybersize/MIDIPlusPlus-Luau/main/MIDIPlusPlus.lua?v=1.0.2"))()
 ```
 
 1. The loader downloads the player from this repository and opens its GUI.
@@ -56,10 +56,29 @@ Continue choosing `song.mid` in the player: a matching `.mid.b64` file is prefer
 | Sustain | Convert MIDI CC64 to the Space pedal key |
 | Velocity / Alt | Send the original project's 32-step Alt key velocity controls |
 | Loop | Repeat the song |
+| Input | Cycle the available keyboard output modes |
+| Test keys | Send T, U, O and report how many key events reach Roblox |
 
 Drag the title bar to move the window. Minimize with `_`. Close with `X` to release input and unload the script. Executing the script again replaces the previous instance.
 
 Typing in a Roblox text box pauses playback. By default, switching away from Roblox also pauses playback. Press Play/F6 to resume. Seeking and resuming reconstruct held notes and MIDI pedal state; already-released notes under a pedal are retriggered to approximate their tails.
+
+## If the piano is silent
+
+First confirm that pressing **T** manually plays a note while the piano is open. Click **Test keys** and keep Roblox focused for the countdown. The test sends T, U, O one at a time. It works without loading a MIDI.
+
+- **3/3 keys reached Roblox:** keyboard events were observed by UserInputService. If the piano remains silent, check the game's active piano, keyboard layout, and any UI consuming input. Receiving a key event does not prove that the game's sound handler accepted it.
+- **Keys sent; Roblox received none:** select the next **Input** mode and test again. Some executor functions exist but perform no input.
+- **Input error:** the selected API is unavailable or denied in that session. Select another Input mode.
+- **Paused/focus message:** click the Roblox game window and press F6. Playing from a separate executor window can leave Roblox unfocused.
+
+Version 1.0.2 passes a real Roblox Instance to virtual-input methods instead of the executor's `game` proxy. It prefers a dedicated VirtualInputManager instance and offers the service instance as a separate mode. When `identifyexecutor` reports Xeno, Auto prefers virtual input over native key functions. [Published Xeno source](https://github.com/tyronetheqt/Xeno/blob/main/Xeno/include/client.lua) illustrates the game proxy and dedicated virtual input object; behavior can vary by executor release.
+
+## BPM and tempo
+
+Tempo is automatic: the parser reads embedded MIDI tempo events and follows changes throughout the song. With **Speed 1.00**, the original tempo is used. A file without tempo metadata uses the MIDI default of **120 BPM**. This reads timing information from the file; it does not estimate BPM from audio.
+
+The timeline shows the current effective BPM, including the Speed multiplier: 120 BPM at Speed 1.50 displays 180 BPM. Seeking updates the displayed tempo. SMPTE-timed files use fixed time divisions and display **Timing: SMPTE** instead.
 
 ## Piano layouts
 
@@ -71,9 +90,9 @@ Your piano must support the same layout. Enable the game's 88-key mode before en
 
 This version targets the common APIs used by Xeno-style executor environments. GUI initialization has been observed in Xeno; end-to-end piano playback remains unverified by the automated checks. Passing in one executor does not establish compatibility with every other executor.
 
-The default **Auto** backend uses `keypress` and `keyrelease` if both exist, then uses `VirtualInputManager:SendKeyEvent` if those functions are absent. It can also fall back when the first native input call raises an error. Presence alone cannot detect a silent no-op. Roblox documents VirtualInputManager as an internal service; access depends on the executor's permissions.
+The default **Auto** backend prefers a dedicated VirtualInputManager for detected Xeno sessions. Other environments use `keypress` and `keyrelease` when both exist, or virtual input otherwise. It can fall back when the first native input call raises an error. A failed first virtual-input call can try the service object in Auto mode. **Test keys** checks for observed Roblox key events to help expose silent no-ops. Roblox documents VirtualInputManager as an internal service; access depends on the executor's permissions.
 
-If Play shows an input error, or no notes are heard, try the other backend using the configuration below and execute the script again. The status line reports input errors and the selected backend. If neither backend is permitted, a plain script cannot provide keyboard input in that environment.
+If Play shows an input error, or no notes are heard, use the **Input** button to switch backends and click **Test keys**. The status line reports input errors and the selected backend. If no backend is permitted, a plain script cannot provide keyboard input in that environment.
 
 | API | Purpose | Alternative |
 | --- | --- | --- |
@@ -90,7 +109,7 @@ Put this **before the short loader command** in the executor editor, or before t
 
 ```lua
 getgenv().MIDIPlusPlusConfig = {
-    Backend = "Auto", -- "Auto", "Executor", or "VirtualInput"
+    Backend = "Auto", -- "Auto", "Executor", "VirtualInput", or "VirtualInputService"
     DefaultFile = "MIDIPlusPlus/song.mid",
     Folder = "MIDIPlusPlus",
     StartDelay = 1.5,
@@ -116,7 +135,7 @@ getgenv().MIDIPlusPlusConfig = {
 }
 ```
 
-To test the alternate input backend, set `Backend = "VirtualInput"` or `Backend = "Executor"` and run the loader again. Settings are read at initialization. Changing the configuration table after execution does not update an existing player.
+You can change the input backend with the GUI's **Input** button, or set `Backend` in the startup config. Other configuration settings are read at initialization. Changing the configuration table after execution does not update an existing player.
 
 If adapting to another keyboard API, supply `SendKey = function(keyCode, isDown, virtualKeyCode) ... end` in the config. This takes priority over Backend. The function must return promptly, preserve key order, and raise an error when input fails. Mapping entries support a letter, digit, common US punctuation, Space, Tab, Enter, Backspace, Delete, Escape, arrow key, or F1–F12, optionally prefixed with `ctrl+`, `shift+`, or `alt+`. Do not map note keys to the pedal key or modifier keys. Disable Hotkeys when mapping notes to F4/F6/F7/F8.
 
@@ -137,7 +156,10 @@ midi:Seek(15) -- seconds in the MIDI's original timeline
 midi:Play() -- idempotent; respects StartDelay
 midi:Pause()
 midi:Stop()
+midi:SetBackend("VirtualInput") -- pause and select an available input mode
+midi:TestInput() -- three-note test; results are in midi:Status().inputTest
 print(midi:Status().backend)
+print(midi:Status().midiBpm, midi:Status().bpm) -- original / speed-adjusted tempo
 -- midi:Destroy()
 ```
 
@@ -156,12 +178,13 @@ File/URL/Base64 loading is asynchronous. Wait until the UI reports that loading 
 
 ## Validation and source
 
-The parser/playback core passed 28 tests with the official Luau CLI. The full script passed 17 integration tests using mock Roblox services and executor APIs to check UI wiring, loading, input selection, and cleanup. The GitHub entrypoint is also tested with mocked HTTP requests. The base64 loading path was checked with 13 real MIDI files, including files whose bytes are truncated by a simulated text-mode reader. These are local checks; real game compatibility and visual behavior need an in-game run.
+The parser/playback core passed 29 tests with the official Luau CLI. The full script passed 25 integration tests using mock Roblox services and executor APIs to check UI wiring, loading, input selection, proxy compatibility, input observation, BPM, and cleanup. The GitHub entrypoint is also tested with mocked HTTP requests. The base64 loading path was checked with 13 real MIDI files, including files whose bytes are truncated by a simulated text-mode reader. These are local checks; real game compatibility and visual behavior need an in-game run.
 
 To run the included parser and converter regressions locally:
 
 ```powershell
 luau tests/core.spec.luau
+luau tests/runtime.spec.luau
 python -B -m unittest discover -s tests -p "test_*.py"
 ```
 
