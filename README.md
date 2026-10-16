@@ -1,0 +1,149 @@
+# MIDI++ Luau
+
+A Roblox Luau MIDI piano player inspired by [Zephkek/MIDIPlusPlus](https://github.com/Zephkek/MIDIPlusPlus). It uses virtual keyboard input, so it does not need a particular game's remotes or internal scripts. Hosted at [Cybersize/MIDIPlusPlus-Luau](https://github.com/Cybersize/MIDIPlusPlus-Luau).
+
+## Run in Xeno
+
+Paste this into Xeno's script editor and execute it in Roblox:
+
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Cybersize/MIDIPlusPlus-Luau/main/MIDIPlusPlus.lua"))()
+```
+
+1. The loader downloads the player from this repository and opens its GUI.
+2. Open or sit at the piano in your game. Enable that game's computer-keyboard piano controls if needed.
+3. Click **Load demo**, then **Play**. Playback starts after 1.5 seconds. If you hear the demo, the input backend and piano layout work together.
+4. Put your own MIDI file in the executor's workspace, for example `workspace/MIDIPlusPlus/song.mid`. Use the executor's actual workspace folder; its location varies by installation.
+5. Enter `MIDIPlusPlus/song.mid` in the player's **File** field, click **Load**, and click **Play**.
+
+You can also select **URL** and paste a direct link to a binary `.mid` file, or select **Base64** and paste encoded MIDI bytes. A GitHub file-view URL or a YouTube URL is not a MIDI download. **Files** lists MIDI files inside the `MIDIPlusPlus` workspace folder when `listfiles` is available.
+
+The included `demo.mid` is the same original short melody as the built-in demo. The entrypoint downloads `lib/Core.lua` and `lib/Player.lua` from one fixed source commit, so both libraries use the same version. No third-party UI library is used. Song URLs load MIDI data only.
+
+If you prefer a self-contained file, copy the entire contents of `MIDIPlusPlus-standalone.lua` into the executor instead. It contains the same player and does not download code. `Loader.lua` contains the short GitHub startup command; library files are dependencies and are not run directly.
+
+## Controls
+
+| Control | Action |
+| --- | --- |
+| Play / F6 | Start, pause, or cancel a pending start |
+| Stop / F7 | Release keys and return to the beginning |
+| Restart | Return to the beginning and start after the countdown |
+| Panic / F4 | Stop immediately and attempt to release every injected key |
+| F8 | Show or hide the player |
+| Timeline | Click to seek |
+| -5 sec / +5 sec | Seek backward or forward |
+| Speed | 0.10–4.00 times the MIDI's original tempo |
+| Transpose | -48 to +48 semitones |
+| Mute / Solo | Enable or isolate individual MIDI tracks |
+| 88 keys | Use the original project's extended Ctrl key layout |
+| Skip drums | Ignore MIDI channel 10; enabled by default |
+| Fold octaves | Move out-of-range notes by octaves into the chosen range |
+| Sustain | Convert MIDI CC64 to the Space pedal key |
+| Velocity / Alt | Send the original project's 32-step Alt key velocity controls |
+| Loop | Repeat the song |
+
+Drag the title bar to move the window. Minimize with `_`. Close with `X` to release input and unload the script. Executing the script again replaces the previous instance.
+
+Typing in a Roblox text box pauses playback. By default, switching away from Roblox also pauses playback. Press Play/F6 to resume. Seeking and resuming reconstruct held notes and MIDI pedal state; already-released notes under a pedal are retriggered to approximate their tails.
+
+## Piano layouts
+
+The default 61-key layout follows the original project: MIDI 36 (C2) is `1`, MIDI 60 (C4) is `t`, and MIDI 96 (C7) is `m`. Uppercase letters and shifted digit symbols use Shift. The extended 88-key layout adds MIDI 21–35 and 97–108 using Ctrl combinations.
+
+Your piano must support the same layout. Enable the game's 88-key mode before enabling **88 keys** here. Velocity is **off by default**: enable it only if the piano uses Alt plus `1234567890qwertyuiopasdfghjklzxc` for velocity. The five curves are adapted from MIDIPlusPlus: Linear, Fine, Soft, Log, and Exp. Ordinary keyboard input cannot apply per-note velocity unless the game implements such controls.
+
+## Executor compatibility
+
+This version targets the common APIs used by Xeno-style executor environments. **It has not been run inside Xeno or a live Roblox game.** Passing in one executor does not establish compatibility with every other executor.
+
+The default **Auto** backend uses `keypress` and `keyrelease` if both exist, then uses `VirtualInputManager:SendKeyEvent` if those functions are absent. It can also fall back when the first native input call raises an error. Presence alone cannot detect a silent no-op. Roblox documents VirtualInputManager as an internal service; access depends on the executor's permissions.
+
+If Play shows an input error, or no notes are heard, try the other backend using the configuration below and execute the script again. The status line reports input errors and the selected backend. If neither backend is permitted, a plain script cannot provide keyboard input in that environment.
+
+| API | Purpose | Alternative |
+| --- | --- | --- |
+| `keypress`, `keyrelease` | Keyboard output using Windows virtual key codes | VirtualInputManager or custom SendKey |
+| VirtualInputManager | Keyboard output using Roblox KeyCodes | Native key functions or custom SendKey |
+| `readfile` | Local binary MIDI files | URL, Base64, built-in demo |
+| `listfiles` | File menu | Type the file path |
+| `request`, `http_request`, or `syn.request` | MIDI download | `game:HttpGet` if no request API exists; otherwise local files/Base64 |
+| `gethui` | Optional GUI parent | Local player's PlayerGui |
+
+## Optional configuration
+
+Put this **before the short loader command** in the executor editor, or before the contents of `MIDIPlusPlus-standalone.lua` when using that version. Only include settings you want to change.
+
+```lua
+getgenv().MIDIPlusPlusConfig = {
+    Backend = "Auto", -- "Auto", "Executor", or "VirtualInput"
+    DefaultFile = "MIDIPlusPlus/song.mid",
+    Folder = "MIDIPlusPlus",
+    StartDelay = 1.5,
+    Full88Keys = false,
+    SkipDrums = true,
+    FoldOutOfRange = false,
+    Sustain = true,
+    SustainKey = "Space",
+    Velocity = false,
+    Curve = "Linear", -- "Linear", "Fine", "Soft", "Log", "Exp"
+    Speed = 1,
+    Transpose = 0,
+    Loop = false,
+    PauseOnFocusLoss = true,
+    Hotkeys = true,
+    Keymap = {
+        -- Keys are MIDI note numbers; entries override the chosen layout.
+        -- [60] = "t",
+        -- [61] = "shift+t", -- "T" also means Shift+t
+        -- [21] = "ctrl+1",
+        -- [36] = false, -- disable this note
+    },
+}
+```
+
+To test the alternate input backend, set `Backend = "VirtualInput"` or `Backend = "Executor"` and run the loader again. Settings are read at initialization. Changing the configuration table after execution does not update an existing player.
+
+If adapting to another keyboard API, supply `SendKey = function(keyCode, isDown, virtualKeyCode) ... end` in the config. This takes priority over Backend. The function must return promptly, preserve key order, and raise an error when input fails. Mapping entries support a letter, digit, common US punctuation, Space, Tab, Enter, Backspace, Delete, Escape, arrow key, or F1–F12, optionally prefixed with `ctrl+`, `shift+`, or `alt+`. Do not map note keys to the pedal key or modifier keys. Disable Hotkeys when mapping notes to F4/F6/F7/F8.
+
+## Script API
+
+After execution, `getgenv().MIDIPlusPlus` exposes:
+
+```lua
+local midi = getgenv().MIDIPlusPlus
+midi:LoadFile("MIDIPlusPlus/song.mid")
+-- midi:LoadURL("https://your-host.example/song.mid")
+-- midi:LoadBase64("...")
+-- midi:LoadData(binaryString, "Song name")
+midi:SetSpeed(0.8)
+midi:SetTranspose(0)
+midi:SetTrack(1, false, true) -- track index, muted, solo (indices start at 1)
+midi:Seek(15) -- seconds in the MIDI's original timeline
+midi:Play() -- idempotent; respects StartDelay
+midi:Pause()
+midi:Stop()
+print(midi:Status().backend)
+-- midi:Destroy()
+```
+
+File/URL/Base64 loading is asynchronous. Wait until the UI reports that loading has finished before Play. `LoadData` parses synchronously. API callers should use `pcall` to handle invalid arguments and errors.
+
+## Supported MIDI and limits
+
+- Standard MIDI formats 0 and 1; PPQN tempo changes, running status, and SMPTE divisions, including 29.97 fps.
+- RIFF/RMID containers, track names, note-on/off, velocity-zero note-offs, sustain, and CC120/121/123 cleanup.
+- Tracks merge into one shared timeline. Tracks with no notes remain available because they may contain pedal controls.
+- Limits: 16 MiB MIDI data, 250,000 source events, and 256 tracks. Oversized or malformed files display an error.
+- Playback runs on Roblox Heartbeat. Timing depends on client frame rate, executor input behavior, and the game's piano. There is no sub-millisecond latency guarantee.
+- After a client stall over half a second, or a frame with more than 4,096 due events, the player rebuilds the current note state instead of sending all expired notes. Dense black MIDI can exceed practical client/input limits.
+- Keyboard output has physical key constraints. Notes sharing a base key, such as `t` and `T`, can retrigger or release differently depending on the game. MIDI sustain channels merge into one Space pedal. Full independent MIDI polyphony/pedals/velocity cannot be guaranteed through a keyboard interface.
+- This adaptation does not include native MIDI-device connections, Windows audio-volume control, the original native timing engine, automatic key/genre estimation, or MIDI format 2. It does not synthesize audio itself; the game's piano produces sound. Pitch bend, instruments, and most MIDI controllers are ignored.
+
+## Validation and source
+
+The parser/playback core passed 24 tests with the official Luau CLI. The full script passed 14 integration tests using mock Roblox services and executor APIs to check UI wiring, loading, input selection, and cleanup. The GitHub entrypoint is also tested with mocked HTTP requests. These are local checks; real game compatibility and visual behavior need an in-game run.
+
+Original source and attribution are recorded in `NOTICE.md`. The editable Lua files contain the full implementation. See `LICENSE` for GNU GPL version 3.
+
+References: [original MIDIPlusPlus](https://github.com/Zephkek/MIDIPlusPlus), [Roblox RunService](https://create.roblox.com/docs/reference/engine/classes/RunService), [VirtualInputManager documentation](https://github.com/Roblox/creator-docs/blob/main/content/en-us/reference/engine/classes/VirtualInputManager.yaml), and [Standard MIDI Files](https://midi.org/standard-midi-files).
