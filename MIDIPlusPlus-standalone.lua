@@ -1,4 +1,4 @@
--- MIDI++ Luau 1.0.0
+-- MIDI++ Luau 1.0.1
 -- SPDX-License-Identifier: GPL-3.0-only
 -- Piano layouts and velocity curves adapted from Zephkek/MIDIPlusPlus.
 -- https://github.com/Zephkek/MIDIPlusPlus
@@ -92,7 +92,8 @@ function Core.parse(data, limits)
             tag, size = take(4), u32()
         end
         local trackEnd = p + size - 1
-        check(trackEnd <= #data, "track length exceeds file")
+        check(trackEnd <= #data, string.format("track %d declares %d bytes, but only %d remain (incomplete binary read)",
+            trackIndex, size, #data - p + 1))
         boundary = trackEnd
         local track = { name = "Track " .. trackIndex, notes = 0, channels = {}, muted = false, solo = false }
         tracks[trackIndex] = track
@@ -189,6 +190,33 @@ function Core.decodeBase64(text)
         if d ~= "=" then result[#result + 1] = string.char(value % 256) end
     end
     return table.concat(result)
+end
+
+-- Some executor bridges read files in Windows text mode, which can truncate
+-- binary MIDI at 0x1A. A .mid.b64 sidecar carries the original bytes as ASCII.
+-- Reader injection keeps this path testable without executor-specific globals.
+function Core.loadFile(path, reader, limits)
+    check(type(path) == "string" and #path > 0, "enter a MIDI path")
+    check(type(reader) == "function", "this executor has no readfile; use URL, Base64, or Demo")
+    local function parseText(text)
+        check(type(text) == "string", "readfile did not return a string")
+        check(#text <= 24 * 1024 * 1024, "base64 file is too large")
+        return Core.parse(Core.decodeBase64(text), limits)
+    end
+    if path:lower():match("%.b64$") then
+        return parseText(reader(path)), {path = path, binarySafe = true}
+    end
+    local sidecar = path .. ".b64"
+    local found, encoded = pcall(reader, sidecar)
+    if found and type(encoded) == "string" and #encoded > 0 then
+        local ok, song = pcall(parseText, encoded)
+        check(ok, "invalid .b64 sidecar; run Convert-MIDI again: " .. tostring(song))
+        return song, {path = sidecar, binarySafe = true}
+    end
+    local data = reader(path)
+    local ok, song = pcall(Core.parse, data, limits)
+    check(ok, "could not load MIDI bytes. Run Convert-MIDI to create " .. path .. ".b64. Details: " .. tostring(song))
+    return song, {path = path, binarySafe = false}
 end
 
 local limited = { "1", "!", "2", "@", "3", "4", "$", "5", "%", "6", "^", "7",
@@ -656,7 +684,7 @@ end
 
 local header = make("Frame", {Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1, Active = true}, window)
 label(header, "MIDI++", 22, 10, 140, 25, 23, colors.accent).Font = Enum.Font.GothamBold
-label(header, "LUAU  /  VIRTUAL PIANO", 23, 37, 360, 16, 10, colors.muted)
+label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.1", 23, 37, 360, 16, 10, colors.muted)
 local minimize = button(header, "_", 548, 16, 30, 30)
 local close = button(header, "X", 586, 16, 30, 30)
 local body = make("Frame", {Position = UDim2.fromOffset(0, 62), Size = UDim2.fromOffset(640, 580), BackgroundTransparency = 1}, window)
@@ -779,7 +807,10 @@ local function refreshTracks()
     end
     tracksFrame.CanvasSize = UDim2.fromOffset(0, #player.song.tracks * 32)
 end
-local sourceMode, loading = "File", false
+local sourceMode, loading, fileList, loadedSource = "File", false, nil, nil
+local function closeFileList()
+    if fileList then fileList:Destroy(); fileList = nil end
+end
 local function setSourceMode(mode)
     sourceMode, modeButton.Text = mode, mode
     sourceBox.Text = ""
@@ -801,17 +832,20 @@ local function fetchMidi(url)
     end
     return game:HttpGet(url)
 end
-local function installSong(song, name)
+local function installSong(song, name, sourceInfo)
     cancelStart()
     player:load(song)
+    loadedSource = sourceInfo
     songLabel.Text = name
     local notes = 0
     for _, track in ipairs(song.tracks) do notes = notes + track.notes end
     metaLabel.Text = string.format("%s  /  %d tracks  /  %d notes  /  MIDI format %d", formatTime(song.duration), #song.tracks, notes, song.format)
     refreshTracks()
-    status("Loaded. Open the game's piano, then press Play. Input: " .. backend.name)
+    status((sourceInfo and sourceInfo.binarySafe and "Loaded via binary-safe .b64. " or "Loaded. ")
+        .. "Open the game's piano, then press Play. Input: " .. backend.name)
 end
 local function loadSource(value, mode)
+    closeFileList()
     if loading then status("A MIDI is already loading."); return end
     cancelStart()
     player:stop()
@@ -820,12 +854,14 @@ local function loadSource(value, mode)
     loading, loadButton.Text = true, "Loading..."
     status("Loading MIDI...")
     task.spawn(function()
+        local sourceInfo
         local ok, songOrError = pcall(function()
             local data
             if mode == "Raw" then data = value
             elseif mode == "File" then
-                assert(type(readfile) == "function", "This executor has no readfile. Use URL, Base64, or Demo.")
-                data = readfile(value)
+                local song
+                song, sourceInfo = Core.loadFile(value, readfile)
+                return song
             elseif mode == "URL" then data = fetchMidi(value)
             elseif mode == "Base64" then
                 assert(#value <= 24 * 1024 * 1024, "Base64 source is too large")
@@ -837,7 +873,7 @@ local function loadSource(value, mode)
         loading, loadButton.Text = false, "Load"
         if ok then
             local name = mode == "Raw" and "Demo - MIDI++ Luau" or mode == "Base64" and "Base64 MIDI" or value:match("([^/\\?]+)%??[^/\\]*$") or "MIDI"
-            local installed, err = pcall(installSong, songOrError, name:sub(1, 120))
+            local installed, err = pcall(installSong, songOrError, name:sub(1, 120), sourceInfo)
             if not installed then fail(err) end
         else status(songOrError, true) end
     end)
@@ -845,16 +881,21 @@ end
 connect(loadButton.Activated, safely(function() loadSource(trim(sourceBox.Text), sourceMode) end))
 connect(demoButton.Activated, safely(function() loadSource(Core.decodeBase64(DEMO_BASE64), "Raw") end))
 
-local fileList
 connect(filesButton.Activated, safely(function()
-    if fileList then fileList:Destroy(); fileList = nil; return end
+    if fileList then closeFileList(); return end
     assert(type(listfiles) == "function", "This executor has no listfiles; type the relative file path instead")
     local folder = Config.Folder or "MIDIPlusPlus"
     if type(makefolder) == "function" then pcall(makefolder, folder) end
-    local files, filtered = listfiles(folder), {}
+    local files, filtered, choices = listfiles(folder), {}, {}
     for _, file in ipairs(files) do
-        if file:lower():match("%.midi?$") or file:lower():match("%.rmi$") then filtered[#filtered + 1] = file end
+        local lower = file:lower()
+        local base = lower:gsub("%.b64$", "")
+        if base:match("%.midi?$") or base:match("%.rmi$") then
+            local canonical = base:gsub("\\", "/"):gsub("^%./", "")
+            if not choices[canonical] or not lower:match("%.b64$") then choices[canonical] = file end
+        end
     end
+    for _, file in pairs(choices) do filtered[#filtered + 1] = file end
     table.sort(filtered)
     fileList = make("ScrollingFrame", {Position = UDim2.fromOffset(22, 99), Size = UDim2.fromOffset(594, 158),
         BackgroundColor3 = colors.panel, BorderSizePixel = 0, ScrollBarThickness = 5, ZIndex = 20,
@@ -870,12 +911,13 @@ connect(filesButton.Activated, safely(function()
         -- Destroying the file menu also disconnects these Instance signals.
         b.Activated:Connect(function()
             setSourceMode("File"); sourceBox.Text = path
-            fileList:Destroy(); fileList = nil
+            closeFileList()
         end)
     end
 end))
 
 local function startOrPause()
+    closeFileList()
     if player.playing or pendingPlay then
         cancelStart(); player:pause(); status("Paused."); return
     end
@@ -984,7 +1026,7 @@ if bool(Config.Hotkeys, true) then
     end))
 end
 
-local api = { Version = "1.0.0", InputBackend = function() return backend.name end }
+local api = { Version = "1.0.1", InputBackend = function() return backend.name end }
 function api:Destroy()
     if not alive then return end
     cancelStart()
@@ -1021,7 +1063,8 @@ end
 function api:Status()
     return { playing = player.playing, pending = pendingPlay, position = player.position,
         duration = player.song and player.song.duration or 0, backend = backend.name,
-        speed = player.speed, transpose = player.transpose, skippedNotes = player.skipped, resyncs = player.resyncs }
+        speed = player.speed, transpose = player.transpose, skippedNotes = player.skipped, resyncs = player.resyncs,
+        source = loadedSource and loadedSource.path or nil, binarySafe = loadedSource and loadedSource.binarySafe or false }
 end
 environment.MIDIPlusPlus = api
 connect(close.Activated, function() api:Destroy() end)

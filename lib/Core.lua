@@ -81,7 +81,8 @@ function Core.parse(data, limits)
             tag, size = take(4), u32()
         end
         local trackEnd = p + size - 1
-        check(trackEnd <= #data, "track length exceeds file")
+        check(trackEnd <= #data, string.format("track %d declares %d bytes, but only %d remain (incomplete binary read)",
+            trackIndex, size, #data - p + 1))
         boundary = trackEnd
         local track = { name = "Track " .. trackIndex, notes = 0, channels = {}, muted = false, solo = false }
         tracks[trackIndex] = track
@@ -178,6 +179,33 @@ function Core.decodeBase64(text)
         if d ~= "=" then result[#result + 1] = string.char(value % 256) end
     end
     return table.concat(result)
+end
+
+-- Some executor bridges read files in Windows text mode, which can truncate
+-- binary MIDI at 0x1A. A .mid.b64 sidecar carries the original bytes as ASCII.
+-- Reader injection keeps this path testable without executor-specific globals.
+function Core.loadFile(path, reader, limits)
+    check(type(path) == "string" and #path > 0, "enter a MIDI path")
+    check(type(reader) == "function", "this executor has no readfile; use URL, Base64, or Demo")
+    local function parseText(text)
+        check(type(text) == "string", "readfile did not return a string")
+        check(#text <= 24 * 1024 * 1024, "base64 file is too large")
+        return Core.parse(Core.decodeBase64(text), limits)
+    end
+    if path:lower():match("%.b64$") then
+        return parseText(reader(path)), {path = path, binarySafe = true}
+    end
+    local sidecar = path .. ".b64"
+    local found, encoded = pcall(reader, sidecar)
+    if found and type(encoded) == "string" and #encoded > 0 then
+        local ok, song = pcall(parseText, encoded)
+        check(ok, "invalid .b64 sidecar; run Convert-MIDI again: " .. tostring(song))
+        return song, {path = sidecar, binarySafe = true}
+    end
+    local data = reader(path)
+    local ok, song = pcall(Core.parse, data, limits)
+    check(ok, "could not load MIDI bytes. Run Convert-MIDI to create " .. path .. ".b64. Details: " .. tostring(song))
+    return song, {path = path, binarySafe = false}
 end
 
 local limited = { "1", "!", "2", "@", "3", "4", "$", "5", "%", "6", "^", "7",

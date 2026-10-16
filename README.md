@@ -7,13 +7,13 @@ A Roblox Luau MIDI piano player inspired by [Zephkek/MIDIPlusPlus](https://githu
 Paste this into Xeno's script editor and execute it in Roblox:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/Cybersize/MIDIPlusPlus-Luau/main/MIDIPlusPlus.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Cybersize/MIDIPlusPlus-Luau/main/MIDIPlusPlus.lua?v=1.0.1"))()
 ```
 
 1. The loader downloads the player from this repository and opens its GUI.
 2. Open or sit at the piano in your game. Enable that game's computer-keyboard piano controls if needed.
 3. Click **Load demo**, then **Play**. Playback starts after 1.5 seconds. If you hear the demo, the input backend and piano layout work together.
-4. Put your own MIDI file in the executor's workspace, for example `workspace/MIDIPlusPlus/song.mid`. Use the executor's actual workspace folder; its location varies by installation.
+4. Put your own MIDI file in the executor's workspace, for example `workspace/MIDIPlusPlus/song.mid`. For Xeno, run the included `Convert-MIDI.cmd` once to create text-safe copies beside your MIDI files (requires Python 3). Use the executor's actual workspace folder; its location varies by installation.
 5. Enter `MIDIPlusPlus/song.mid` in the player's **File** field, click **Load**, and click **Play**.
 
 You can also select **URL** and paste a direct link to a binary `.mid` file, or select **Base64** and paste encoded MIDI bytes. A GitHub file-view URL or a YouTube URL is not a MIDI download. **Files** lists MIDI files inside the `MIDIPlusPlus` workspace folder when `listfiles` is available.
@@ -21,6 +21,20 @@ You can also select **URL** and paste a direct link to a binary `.mid` file, or 
 The included `demo.mid` is the same original short melody as the built-in demo. The entrypoint downloads `lib/Core.lua` and `lib/Player.lua` from one fixed source commit, so both libraries use the same version. No third-party UI library is used. Song URLs load MIDI data only.
 
 If you prefer a self-contained file, copy the entire contents of `MIDIPlusPlus-standalone.lua` into the executor instead. It contains the same player and does not download code. `Loader.lua` contains the short GitHub startup command; library files are dependencies and are not run directly.
+
+## Fix for incomplete binary reads in Xeno
+
+Version 1.0.1 supports binary-safe `.mid.b64` files. A text-mode file bridge can truncate a MIDI at byte `0x1A` (Ctrl+Z), causing an error about a track length exceeding the remaining file bytes. The original MIDI file can still be valid. One [published Xeno source version](https://github.com/tyronetheqt/Xeno/blob/main/Xeno/src/server.cpp#L72) opens files as a text stream.
+
+Run `Convert-MIDI.cmd`, or use:
+
+```powershell
+python Convert-MIDI.py "C:\path\to\workspace\MIDIPlusPlus"
+```
+
+With no path, the converter uses `%LOCALAPPDATA%\Xeno\workspace\MIDIPlusPlus`. It writes ASCII base64 files such as `song.mid.b64` beside the original files. It leaves the `.mid` files untouched and performs no network requests. Run it again after adding or changing songs.
+
+Continue choosing `song.mid` in the player: a matching `.mid.b64` file is preferred automatically. You can also load a `.mid.b64` file directly. The status line confirms when the text-safe file was used, and the file menu hides duplicate sidecars. Both paths use the same MIDI parser and preserve all original note bytes; incomplete MIDI data is still rejected.
 
 ## Controls
 
@@ -55,7 +69,7 @@ Your piano must support the same layout. Enable the game's 88-key mode before en
 
 ## Executor compatibility
 
-This version targets the common APIs used by Xeno-style executor environments. **It has not been run inside Xeno or a live Roblox game.** Passing in one executor does not establish compatibility with every other executor.
+This version targets the common APIs used by Xeno-style executor environments. GUI initialization has been observed in Xeno; end-to-end piano playback remains unverified by the automated checks. Passing in one executor does not establish compatibility with every other executor.
 
 The default **Auto** backend uses `keypress` and `keyrelease` if both exist, then uses `VirtualInputManager:SendKeyEvent` if those functions are absent. It can also fall back when the first native input call raises an error. Presence alone cannot detect a silent no-op. Roblox documents VirtualInputManager as an internal service; access depends on the executor's permissions.
 
@@ -65,7 +79,7 @@ If Play shows an input error, or no notes are heard, try the other backend using
 | --- | --- | --- |
 | `keypress`, `keyrelease` | Keyboard output using Windows virtual key codes | VirtualInputManager or custom SendKey |
 | VirtualInputManager | Keyboard output using Roblox KeyCodes | Native key functions or custom SendKey |
-| `readfile` | Local binary MIDI files | URL, Base64, built-in demo |
+| `readfile` | Local MIDI or `.mid.b64` files | URL, Base64, built-in demo |
 | `listfiles` | File menu | Type the file path |
 | `request`, `http_request`, or `syn.request` | MIDI download | `game:HttpGet` if no request API exists; otherwise local files/Base64 |
 | `gethui` | Optional GUI parent | Local player's PlayerGui |
@@ -142,7 +156,14 @@ File/URL/Base64 loading is asynchronous. Wait until the UI reports that loading 
 
 ## Validation and source
 
-The parser/playback core passed 24 tests with the official Luau CLI. The full script passed 14 integration tests using mock Roblox services and executor APIs to check UI wiring, loading, input selection, and cleanup. The GitHub entrypoint is also tested with mocked HTTP requests. These are local checks; real game compatibility and visual behavior need an in-game run.
+The parser/playback core passed 28 tests with the official Luau CLI. The full script passed 17 integration tests using mock Roblox services and executor APIs to check UI wiring, loading, input selection, and cleanup. The GitHub entrypoint is also tested with mocked HTTP requests. The base64 loading path was checked with 13 real MIDI files, including files whose bytes are truncated by a simulated text-mode reader. These are local checks; real game compatibility and visual behavior need an in-game run.
+
+To run the included parser and converter regressions locally:
+
+```powershell
+luau tests/core.spec.luau
+python -B -m unittest discover -s tests -p "test_*.py"
+```
 
 Original source and attribution are recorded in `NOTICE.md`. The editable Lua files contain the full implementation. See `LICENSE` for GNU GPL version 3.
 
