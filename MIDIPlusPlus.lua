@@ -2,7 +2,7 @@
 -- SPDX-License-Identifier: GPL-3.0-only
 -- https://github.com/Cybersize/MIDIPlusPlus-Luau
 -- Core/UI libraries use one immutable source commit to keep them compatible.
-local LIBRARY_BASE = "https://raw.githubusercontent.com/Cybersize/MIDIPlusPlus-Luau/fa80c2e04d0b01d00171dc1c3a73295f21567ba2/"
+local LIBRARY_BASE = "https://raw.githubusercontent.com/Cybersize/MIDIPlusPlus-Luau/e6536cf72df1f47be505131ccad03653bf45bd5b/"
 local DEMO_BASE64 = "TVRoZAAAAAYAAAABAeBNVHJrAAAAsQD/AxBNSURJKysgTHVhdSBEZW1vAP9RAwehIACQPFqCaIA8AHj/AQAAkEBagmiAQAB4/wEAAJBDWoJogEMAeP8BAACQSFqCaIBIAHj/AQAAkENagmiAQwB4/wEAAJBAWoJogEAAeP8BAACQPlqCaIA+AHj/AQAAkEFagmiAQQB4/wEAALBAfwCQPGQAkEBkAJBDZACQSGSDYIA8AACAQAAAgEMAAIBIAINgsEAAAP8vAA=="
 
 assert(type(loadstring) == "function", "MIDI++ needs the executor's loadstring function")
