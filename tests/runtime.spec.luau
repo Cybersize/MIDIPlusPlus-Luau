@@ -119,7 +119,16 @@ local services = {Players = {LocalPlayer = localPlayer}, RunService = RunService
 local game = root
 function game:GetService(name) assert(services[name], name); return services[name] end
 local fileData, httpData
-function game:HttpGet(url) assert(url == "https://example.test/song.mid"); return httpData end
+local holdHttp, waitingHttp = false, {}
+function game:HttpGet(url)
+    assert(url == "https://example.test/song.mid")
+    if holdHttp then waitingHttp[#waitingHttp + 1] = coroutine.running(); coroutine.yield() end
+    return httpData
+end
+local function flushHttp()
+    local pending = waitingHttp; waitingHttp = {}
+    for _, thread in ipairs(pending) do local ok, err = coroutine.resume(thread); assert(ok, err) end
+end
 local environment = {MIDIPlusPlusConfig = {BackgroundPlayback = false}}
 local function getgenv() return environment end
 local executorIdentity = "Mock executor"
@@ -140,8 +149,9 @@ local warningLog = {}
 local function warn(message) warningLog[#warningLog + 1] = message end
 local timers = {}
 local task = {
-    spawn = function(fn) fn() end,
+    spawn = function(fn) local ok, err = coroutine.resume(coroutine.create(fn)); assert(ok, err) end,
     delay = function(_, fn) timers[#timers + 1] = fn end,
+    wait = function() end,
 }
 local function flushTimers()
     local pending = timers; timers = {}
@@ -172,7 +182,7 @@ end
 
 -- The build helper inserts the exact deliverable below, inside runScript().
 local function runScript()
--- MIDI++ Luau 1.0.3
+-- MIDI++ Luau 1.0.4
 -- SPDX-License-Identifier: GPL-3.0-only
 -- Piano layouts and velocity curves adapted from Zephkek/MIDIPlusPlus.
 -- https://github.com/Zephkek/MIDIPlusPlus
@@ -841,7 +851,7 @@ applyMap()
 
 local alive, loadVersion, playVersion, pendingPlay = true, 0, 0, false
 local inputProbe
-local connections, rowConnections = {}, {}
+local connections, rowConnections, queueConnections = {}, {}, {}
 local function connect(signal, callback, bucket)
     local connection = signal:Connect(callback)
     table.insert(bucket or connections, connection)
@@ -873,7 +883,7 @@ end
 local function round(object, radius)
     make("UICorner", {CornerRadius = UDim.new(0, radius or 7)}, object)
 end
-local window = make("Frame", {Name = "Window", Size = UDim2.fromOffset(640, 642),
+local window = make("Frame", {Name = "Window", Size = UDim2.fromOffset(640, 776),
     Position = UDim2.new(0.5, 0, 0.5, 0), AnchorPoint = Vector2.new(0.5, 0.5),
     BackgroundColor3 = colors.background, BorderSizePixel = 0, Active = true}, gui)
 round(window, 12)
@@ -881,7 +891,7 @@ make("UIStroke", {Color = Color3.fromRGB(61, 76, 88), Thickness = 1}, window)
 local scale = make("UIScale", {Scale = 1}, window)
 local function scaleWindow()
     local camera = Workspace.CurrentCamera
-    if camera then scale.Scale = math.clamp(math.min((camera.ViewportSize.X - 24) / 640, (camera.ViewportSize.Y - 24) / 642), 0.3, 1) end
+    if camera then scale.Scale = math.clamp(math.min((camera.ViewportSize.X - 24) / 640, (camera.ViewportSize.Y - 24) / 776), 0.3, 1) end
 end
 scaleWindow()
 connect(Workspace:GetPropertyChangedSignal("CurrentCamera"), scaleWindow)
@@ -920,7 +930,7 @@ end
 
 local header = make("Frame", {Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1, Active = true}, window)
 label(header, "MIDI++", 22, 10, 140, 25, 23, colors.accent).Font = Enum.Font.GothamBold
-label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.3", 23, 37, 360, 16, 10, colors.muted)
+label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.4", 23, 37, 360, 16, 10, colors.muted)
 local backgroundButton = button(header, "", 365, 16, 174, 30)
 local function refreshBackgroundButton()
     backgroundButton.Text = backgroundPlayback and (backend:canBackground() and "Background: ON" or "Background: N/A")
@@ -930,14 +940,18 @@ end
 refreshBackgroundButton()
 local minimize = button(header, "_", 548, 16, 30, 30)
 local close = button(header, "X", 586, 16, 30, 30)
-local body = make("Frame", {Position = UDim2.fromOffset(0, 62), Size = UDim2.fromOffset(640, 580), BackgroundTransparency = 1}, window)
+local body = make("Frame", {Position = UDim2.fromOffset(0, 62), Size = UDim2.fromOffset(640, 714), BackgroundTransparency = 1}, window)
 label(body, "MIDI SOURCE", 22, 3, 200, 20, 11, colors.muted)
 local modeButton = button(body, "File", 22, 29, 78, 34)
-local sourceBox = box(body, Config.DefaultFile or "MIDIPlusPlus/song.mid", "Path inside the executor workspace", 108, 29, 384, 34)
-local loadButton = button(body, "Load", 500, 29, 116, 34, true)
+local sourceBox = box(body, Config.DefaultFile or "MIDIPlusPlus/song.mid", "Path inside the executor workspace", 108, 29, 308, 34)
+local loadButton = button(body, "Load", 424, 29, 92, 34, true)
+local enqueueButton = button(body, "+ Queue", 524, 29, 92, 34)
 local filesButton = button(body, "Files", 22, 71, 78, 26)
-local demoButton = button(body, "Load demo", 108, 71, 104, 26)
-label(body, "Files are relative to your executor's workspace.", 222, 72, 394, 24, 11, colors.muted)
+local refreshButton = button(body, "Refresh", 108, 71, 78, 26)
+local demoButton = button(body, "Load demo", 194, 71, 104, 26)
+local enqueueAllButton = button(body, "Queue all", 306, 71, 100, 26)
+local nextButton = button(body, "Next", 414, 71, 90, 26)
+local clearQueueButton = button(body, "Clear queue", 512, 71, 104, 26)
 local songLabel = label(body, "No MIDI loaded", 22, 108, 594, 25, 17)
 songLabel.Font = Enum.Font.GothamMedium
 local metaLabel = label(body, "Load a file or try the built-in demo.", 22, 137, 594, 19, 11, colors.muted)
@@ -965,7 +979,7 @@ local transposeBox = box(body, tostring(player.transpose), "0", 419, 263, 72, 30
 local transposeUp = button(body, "+", 498, 263, 30, 30)
 label(body, "semitones", 537, 266, 79, 26, 11, colors.muted)
 
-local fail
+local fail, refreshQueue
 local function toggle(text, x, y, get, set)
     local b = button(body, "", x, y, 192, 28)
     local function update()
@@ -985,7 +999,10 @@ toggle("Skip drums", 222, 309, function() return player.skipDrums end, function(
 toggle("Fold octaves", 422, 309, function() return player.fold end, function(value) player.fold = value end)
 toggle("Sustain", 22, 345, function() return player.sustain end, function(value) player.sustain = value end)
 toggle("Velocity / Alt", 222, 345, function() return Keyboard.velocity end, function(value) Keyboard.velocity = value end)
-toggle("Loop", 422, 345, function() return player.looped end, function(value) player.looped = value end)
+toggle("Loop", 422, 345, function() return player.looped end, function(value)
+    player.looped = value
+    if refreshQueue then refreshQueue() end
+end)
 local curveButton = button(body, "Curve: " .. Keyboard.curveName, 22, 385, 192, 28)
 local inputButton = button(body, "Input: " .. backend.mode, 222, 385, 192, 28)
 local testInputButton = button(body, "Test keys", 422, 385, 192, 28)
@@ -995,15 +1012,21 @@ local tracksFrame = make("ScrollingFrame", {Position = UDim2.fromOffset(22, 455)
     BackgroundColor3 = colors.panel, BorderSizePixel = 0, CanvasSize = UDim2.fromOffset(0, 0),
     ScrollBarThickness = 4, ScrollBarImageColor3 = colors.muted, ScrollingDirection = Enum.ScrollingDirection.Y}, body)
 round(tracksFrame)
-local statusLabel = label(body, "Input: " .. backend.name .. " (checked when playing)", 22, 533, 594, 24, 11, colors.accent)
+local queueLabel = label(body, "UP NEXT  (0)", 22, 536, 594, 20, 11, colors.muted)
+local queueFrame = make("ScrollingFrame", {Position = UDim2.fromOffset(22, 563), Size = UDim2.fromOffset(594, 92),
+    BackgroundColor3 = colors.panel, BorderSizePixel = 0, CanvasSize = UDim2.fromOffset(0, 0),
+    ScrollBarThickness = 4, ScrollBarImageColor3 = colors.muted, ScrollingDirection = Enum.ScrollingDirection.Y}, body)
+round(queueFrame)
+local statusLabel = label(body, "Input: " .. backend.name .. " (checked when playing)", 22, 663, 594, 24, 11, colors.accent)
 statusLabel.TextWrapped, statusLabel.TextTruncate = true, Enum.TextTruncate.None
-label(body, "F6 play/pause  /  F7 stop  /  F8 show/hide  /  F4 panic", 22, 560, 594, 16, 10, colors.muted)
+label(body, "F6 play/pause  /  F7 stop  /  F8 show/hide  /  F4 panic", 22, 692, 594, 16, 10, colors.muted)
 
 local function status(message, failed)
     if not alive then return end
     statusLabel.Text = tostring(message):gsub("[\r\n]", " "):sub(1, 240)
     statusLabel.TextColor3 = failed and colors.danger or colors.accent
 end
+local cancelLoading, advanceQueue, startOrPause
 local function cancelStart()
     playVersion = playVersion + 1
     pendingPlay = false
@@ -1014,6 +1037,7 @@ local function cancelStart()
 end
 fail = function(err)
     cancelStart()
+    if cancelLoading then cancelLoading(true) end
     player.playing, player.outputActive = false, false
     Keyboard:panic()
     -- A backend error can interrupt an event after it modified logical state.
@@ -1061,6 +1085,76 @@ local function refreshTracks()
     tracksFrame.CanvasSize = UDim2.fromOffset(0, #player.song.tracks * 32)
 end
 local sourceMode, loading, fileList, loadedSource = "File", false, nil, nil
+local queue, queueSerial, queuedLoading, queueJob = {}, 0, nil, false
+local function sourceName(value, mode)
+    if mode == "Raw" then return "Demo - MIDI++ Luau" end
+    if mode == "Base64" then return "Base64 MIDI" end
+    local path = mode == "URL" and (value:match("^[^?]+") or value) or value
+    return (path:match("([^/\\]+)$") or "MIDI"):sub(1, 120)
+end
+local function queueCount() return #queue + (queuedLoading and 1 or 0) end
+refreshQueue = function()
+    disconnectAll(queueConnections)
+    for _, child in ipairs(queueFrame:GetChildren()) do if child:IsA("Frame") then child:Destroy() end end
+    queueLabel.Text = string.format("UP NEXT  (%d)  /  %s", queueCount(), player.looped and "Loop repeats current song" or "Plays in order")
+    local rows = {}
+    if queuedLoading then rows[1] = queuedLoading end
+    for _, item in ipairs(queue) do rows[#rows + 1] = item end
+    if #rows == 0 then
+        local row = make("Frame", {Size = UDim2.new(1, -6, 0, 30), BackgroundTransparency = 1}, queueFrame)
+        label(row, "Use + Queue beside a file, or Queue all. Press Play to begin.", 10, 0, 570, 30, 11, colors.muted)
+    end
+    for i, item in ipairs(rows) do
+        local row = make("Frame", {Position = UDim2.fromOffset(0, (i - 1) * 30), Size = UDim2.new(1, -6, 0, 30),
+            BackgroundTransparency = 1}, queueFrame)
+        label(row, string.format("%02d  %s%s", i, item == queuedLoading and "Loading: " or "", item.name), 10, 0, 474, 30, 11)
+        local remove = button(row, "Remove", 496, 2, 76, 25)
+        connect(remove.Activated, safely(function()
+            if item == queuedLoading then
+                cancelLoading(false)
+                status("Removed loading song. Press Play or Next to continue the queue.")
+            else
+                for index, pending in ipairs(queue) do
+                    if pending.id == item.id then table.remove(queue, index); break end
+                end
+                refreshQueue()
+            end
+        end), queueConnections)
+    end
+    queueFrame.CanvasSize = UDim2.fromOffset(0, math.max(1, #rows) * 30)
+end
+cancelLoading = function(returnQueued)
+    loadVersion = loadVersion + 1
+    loading, queueJob, loadButton.Text = false, false, "Load"
+    if queuedLoading then
+        if returnQueued then table.insert(queue, 1, queuedLoading) end
+        queuedLoading = nil
+    end
+    if not player.song then
+        songLabel.Text = "No MIDI loaded"
+        metaLabel.Text = "Load a file or add songs to the queue."
+    end
+    refreshQueue()
+end
+local function enqueueSource(value, mode, quiet)
+    local message
+    if type(value) ~= "string" or trim(value) == "" then message = "Choose a MIDI source before adding it to the queue."
+    elseif mode == "Base64" and #value > 24 * 1024 * 1024 then message = "Base64 source is too large."
+    elseif queueCount() >= 128 then message = "Queue is full (128 songs). Remove a song first." end
+    if message then if not quiet then status(message, true) end; return nil, message end
+    queueSerial = queueSerial + 1
+    local item = {id = queueSerial, value = value, mode = mode, name = sourceName(value, mode)}
+    queue[#queue + 1] = item
+    if not quiet then refreshQueue(); status("Queued: " .. item.name) end
+    return item.id
+end
+local function clearQueue()
+    table.clear(queue)
+    if queueJob then cancelLoading(false) end
+    refreshQueue()
+    status("Queue cleared.")
+end
+refreshQueue()
 local function closeFileList()
     if fileList then fileList:Destroy(); fileList = nil end
 end
@@ -1097,51 +1191,47 @@ local function installSong(song, name, sourceInfo)
     status((sourceInfo and sourceInfo.binarySafe and "Loaded via binary-safe .b64. " or "Loaded. ")
         .. "Open the game's piano, then press Play. Input: " .. backend.name)
 end
+local function readSource(value, mode)
+    local data
+    if mode == "File" then return Core.loadFile(value, readfile)
+    elseif mode == "Raw" then data = value
+    elseif mode == "URL" then data = fetchMidi(value)
+    elseif mode == "Base64" then
+        assert(#value <= 24 * 1024 * 1024, "Base64 source is too large")
+        data = Core.decodeBase64(value)
+    else error("Unknown source mode") end
+    return Core.parse(data)
+end
 local function loadSource(value, mode)
     closeFileList()
-    if loading then status("A MIDI is already loading."); return end
     cancelStart()
+    cancelLoading(true)
     player:stop()
-    loadVersion = loadVersion + 1
     local version = loadVersion
     loading, loadButton.Text = true, "Loading..."
     status("Loading MIDI...")
     task.spawn(function()
-        local sourceInfo
-        local ok, songOrError = pcall(function()
-            local data
-            if mode == "Raw" then data = value
-            elseif mode == "File" then
-                local song
-                song, sourceInfo = Core.loadFile(value, readfile)
-                return song
-            elseif mode == "URL" then data = fetchMidi(value)
-            elseif mode == "Base64" then
-                assert(#value <= 24 * 1024 * 1024, "Base64 source is too large")
-                data = Core.decodeBase64(value)
-            else error("Unknown source mode") end
-            return Core.parse(data)
-        end)
+        if not alive or version ~= loadVersion then return end
+        local ok, songOrError, sourceInfo = pcall(readSource, value, mode)
         if not alive or version ~= loadVersion then return end
         loading, loadButton.Text = false, "Load"
         if ok then
-            local name = mode == "Raw" and "Demo - MIDI++ Luau" or mode == "Base64" and "Base64 MIDI" or value:match("([^/\\?]+)%??[^/\\]*$") or "MIDI"
-            local installed, err = pcall(installSong, songOrError, name:sub(1, 120), sourceInfo)
+            local installed, err = pcall(installSong, songOrError, sourceName(value, mode), sourceInfo)
             if not installed then fail(err) end
         else status(songOrError, true) end
     end)
 end
 connect(loadButton.Activated, safely(function() loadSource(trim(sourceBox.Text), sourceMode) end))
 connect(demoButton.Activated, safely(function() loadSource(Core.decodeBase64(DEMO_BASE64), "Raw") end))
+connect(enqueueButton.Activated, function() enqueueSource(trim(sourceBox.Text), sourceMode) end)
 
-connect(filesButton.Activated, safely(function()
-    if fileList then closeFileList(); return end
+local function scanFiles()
     assert(type(listfiles) == "function", "This executor has no listfiles; type the relative file path instead")
     local folder = Config.Folder or "MIDIPlusPlus"
     if type(makefolder) == "function" then pcall(makefolder, folder) end
     local files, filtered, choices = listfiles(folder), {}, {}
     for _, file in ipairs(files) do
-        local lower = file:lower()
+        local lower = tostring(file):lower()
         local base = lower:gsub("%.b64$", "")
         if base:match("%.midi?$") or base:match("%.rmi$") then
             local canonical = base:gsub("\\", "/"):gsub("^%./", "")
@@ -1149,7 +1239,13 @@ connect(filesButton.Activated, safely(function()
         end
     end
     for _, file in pairs(choices) do filtered[#filtered + 1] = file end
-    table.sort(filtered)
+    table.sort(filtered, function(a, b) return a:lower() < b:lower() end)
+    return filtered, folder
+end
+local function refreshFiles()
+    local ok, filtered, folder = pcall(scanFiles)
+    if not ok then status(filtered, true); return nil, filtered end
+    closeFileList()
     fileList = make("ScrollingFrame", {Position = UDim2.fromOffset(22, 99), Size = UDim2.fromOffset(594, 158),
         BackgroundColor3 = colors.panel, BorderSizePixel = 0, ScrollBarThickness = 5, ZIndex = 20,
         CanvasSize = UDim2.fromOffset(0, math.max(1, #filtered) * 30)}, body)
@@ -1159,30 +1255,98 @@ connect(filesButton.Activated, safely(function()
         empty.ZIndex = 21
     end
     for i, path in ipairs(filtered) do
-        local b = button(fileList, path, 4, (i - 1) * 30, 576, 28)
-        b.ZIndex = 21
+        local b = button(fileList, path, 4, (i - 1) * 30, 490, 28)
+        b.ZIndex, b.TextTruncate = 21, Enum.TextTruncate.AtEnd
+        local add = button(fileList, "+ Queue", 502, (i - 1) * 30, 76, 28)
+        add.ZIndex = 21
         -- Destroying the file menu also disconnects these Instance signals.
         b.Activated:Connect(function()
             setSourceMode("File"); sourceBox.Text = path
             closeFileList()
         end)
+        add.Activated:Connect(function() enqueueSource(path, "File") end)
     end
-end))
+    status(string.format("Found %d songs in %s. Select a file or use + Queue.", #filtered, folder))
+    return table.clone(filtered)
+end
+connect(filesButton.Activated, function()
+    if fileList then closeFileList() else refreshFiles() end
+end)
+connect(refreshButton.Activated, function() refreshFiles() end)
+connect(enqueueAllButton.Activated, function()
+    local ok, files = pcall(scanFiles)
+    if not ok then status(files, true); return end
+    local added = 0
+    for _, path in ipairs(files) do
+        if not enqueueSource(path, "File", true) then break end
+        added = added + 1
+    end
+    refreshQueue()
+    status(string.format("Added %d songs to the queue.%s", added, added < #files and " Queue limit: 128." or ""), added < #files)
+end)
+connect(clearQueueButton.Activated, safely(clearQueue))
 
-local function startOrPause()
+advanceQueue = function()
     closeFileList()
-    if player.playing or pendingPlay then
-        cancelStart(); player:pause(); status("Paused."); return
+    cancelStart()
+    cancelLoading(false)
+    player:stop()
+    if #queue == 0 then status("Queue empty. Add a song with + Queue."); return end
+    player:load(nil)
+    loadedSource = nil
+    songLabel.Text = "Loading next song..."
+    metaLabel.Text = "Songs play in the order shown below."
+    refreshTracks()
+    local version = loadVersion
+    loading, queueJob, loadButton.Text = true, true, "Loading..."
+    task.spawn(safely(function()
+        local skipped = 0
+        while alive and version == loadVersion and #queue > 0 do
+            local item = table.remove(queue, 1)
+            queuedLoading = item
+            refreshQueue()
+            status("Loading queued song: " .. item.name)
+            local ok, songOrError, sourceInfo = pcall(readSource, item.value, item.mode)
+            if not alive or version ~= loadVersion then return end
+            if ok then
+                installSong(songOrError, item.name, sourceInfo)
+                queuedLoading = nil
+                loading, queueJob, loadButton.Text = false, false, "Load"
+                refreshQueue()
+                local gap = finite(Config.QueueDelay) and math.clamp(Config.QueueDelay, 0, 10) or 0.5
+                startOrPause(gap)
+                return
+            end
+            skipped = skipped + 1
+            warn("[MIDI++ Luau] Skipped queued song " .. item.name .. ": " .. tostring(songOrError))
+            queuedLoading = nil
+            -- Yield between bad entries so Stop/Next can cancel a long queue.
+            task.wait()
+        end
+        if not alive or version ~= loadVersion then return end
+        loading, queueJob, loadButton.Text = false, false, "Load"
+        refreshQueue()
+        status(string.format("Queue finished; skipped %d unreadable songs. Check file paths / Convert-MIDI.", skipped), skipped > 0)
+    end))
+end
+connect(nextButton.Activated, safely(function() advanceQueue() end))
+
+startOrPause = function(delayOverride)
+    closeFileList()
+    if queueJob or player.playing or pendingPlay then
+        cancelStart(); cancelLoading(true); player:pause(); status("Paused. Queue kept."); return
     end
     if loading then status("Wait for the MIDI to finish loading."); return end
-    if not player.song then status("Load a MIDI or the demo first.", true); return end
+    if #queue > 0 and (not player.song or player.position >= player.song.duration) then advanceQueue(); return end
+    if not player.song then status("Load a MIDI or add songs to the queue first.", true); return end
     if backend.name == "Unavailable" then status("No input backend is available in this executor.", true); return end
     local focused = UserInputService:GetFocusedTextBox()
     if focused then focused:ReleaseFocus() end
     cancelStart()
     local version = playVersion
     pendingPlay = true
-    local delay = finite(Config.StartDelay) and math.clamp(Config.StartDelay, 0, 10) or 1.5
+    local delay = finite(delayOverride) and math.clamp(delayOverride, 0, 10)
+        or (finite(Config.StartDelay) and math.clamp(Config.StartDelay, 0, 10) or 1.5)
     status(string.format("Starting in %.1fs. %s", delay, backgroundPlayback and backend:canBackground()
         and "Background playback enabled." or "Focus the game's piano."))
     task.delay(delay, safely(function()
@@ -1195,10 +1359,11 @@ local function startOrPause()
     end))
 end
 local function stopPlayback()
-    cancelStart(); player:stop(); status("Stopped. All piano keys released.")
+    cancelStart(); cancelLoading(true); player:stop(); status("Stopped. Queue kept. All piano keys released.")
 end
 local function setBackend(mode)
     cancelStart()
+    cancelLoading(true)
     local paused, pauseError = pcall(function() player:pause() end)
     if not paused then player.playing, player.outputActive = false, false; Keyboard:panic(); warn(pauseError) end
     local available = backend:select(mode)
@@ -1212,6 +1377,7 @@ end
 local function setBackgroundPlayback(enabled)
     assert(type(enabled) == "boolean", "BackgroundPlayback must be true or false")
     cancelStart()
+    cancelLoading(true)
     local paused, pauseError = pcall(function() player:pause() end)
     if not paused then player.playing, player.outputActive = false, false; Keyboard:panic(); warn(pauseError) end
     backgroundPlayback = enabled
@@ -1240,6 +1406,7 @@ end))
 local function testInput()
     closeFileList()
     cancelStart()
+    cancelLoading(true)
     player:pause()
     if backend.name == "Unavailable" then status("No keyboard input backend is available.", true); return end
     local focused = UserInputService:GetFocusedTextBox()
@@ -1299,7 +1466,7 @@ connect(playButton.Activated, safely(startOrPause))
 connect(stopButton.Activated, safely(stopPlayback))
 connect(panicButton.Activated, safely(stopPlayback))
 connect(restartButton.Activated, safely(function()
-    cancelStart(); player:stop(); startOrPause()
+    cancelStart(); cancelLoading(true); player:stop(); startOrPause()
 end))
 connect(backButton.Activated, safely(function() player:seek(player.position - 5) end))
 connect(forwardButton.Activated, safely(function() player:seek(player.position + 5) end))
@@ -1344,7 +1511,7 @@ local minimized = false
 connect(minimize.Activated, function()
     minimized = not minimized
     body.Visible = not minimized
-    window.Size = UDim2.fromOffset(640, minimized and 62 or 642)
+    window.Size = UDim2.fromOffset(640, minimized and 62 or 776)
     minimize.Text = minimized and "+" or "_"
 end)
 local dragInput, dragOrigin, windowOrigin
@@ -1362,18 +1529,18 @@ connect(UserInputService.InputChanged, function(input)
 end)
 connect(UserInputService.InputEnded, function(input) if input == dragInput then dragInput = nil end end)
 connect(UserInputService.TextBoxFocused, safely(function()
-    if player.playing or pendingPlay or (inputProbe and inputProbe.running) then
-        cancelStart(); player:pause(); status("Paused while typing in Roblox. Press Play to resume.")
+    if player.playing or pendingPlay or queueJob or (inputProbe and inputProbe.running) then
+        cancelStart(); cancelLoading(true); player:pause(); status("Paused while typing in Roblox. Press Play to resume.")
     end
 end))
 connect(UserInputService.WindowFocused, function() appHasFocus = true end)
 connect(UserInputService.WindowFocusReleased, safely(function()
     appHasFocus = false
-    if player.playing or pendingPlay or (inputProbe and inputProbe.running) then
+    if player.playing or pendingPlay or queueJob or (inputProbe and inputProbe.running) then
         if backgroundPlayback and backend:canBackground() then
             status("Background playback enabled / " .. backend.name)
         else
-            cancelStart(); player:pause()
+            cancelStart(); cancelLoading(true); player:pause()
             status(backgroundPlayback and "This Input needs focus. Choose virtual input for background playback."
                 or "Paused because Roblox lost focus.")
         end
@@ -1389,21 +1556,24 @@ if bool(Config.Hotkeys, true) then
     end))
 end
 
-local api = { Version = "1.0.3", InputBackend = function() return backend.name end }
+local api = { Version = "1.0.4", InputBackend = function() return backend.name end }
 function api:Destroy()
     if not alive then return end
     cancelStart()
+    cancelLoading(false)
     alive, loadVersion = false, loadVersion + 1
     player.playing = false
     Keyboard:panic()
     disconnectAll(connections)
     disconnectAll(rowConnections)
+    disconnectAll(queueConnections)
+    table.clear(queue)
     if ownedVirtualInput then pcall(function() ownedVirtualInput:Destroy() end) end
     if gui.Parent then gui:Destroy() end
     if environment.MIDIPlusPlus == self then environment.MIDIPlusPlus = nil end
 end
-function api:Play() if alive and not player.playing and not pendingPlay then startOrPause() end end
-function api:Pause() if alive then cancelStart(); player:pause(); status("Paused.") end end
+function api:Play() if alive and not player.playing and not pendingPlay and not loading then startOrPause() end end
+function api:Pause() if alive then cancelStart(); cancelLoading(true); player:pause(); status("Paused. Queue kept.") end end
 function api:Stop() if alive then stopPlayback() end end
 function api:SetBackend(mode) assert(alive, "Player was destroyed"); return setBackend(mode) end
 function api:TestInput() assert(alive, "Player was destroyed"); testInput() end
@@ -1416,10 +1586,28 @@ function api:LoadURL(url) assert(alive and type(url) == "string", "LoadURL expec
 function api:LoadBase64(data) assert(alive and type(data) == "string", "LoadBase64 expects text"); loadSource(data, "Base64") end
 function api:LoadData(data, name)
     assert(alive, "Player was destroyed")
-    loadVersion = loadVersion + 1
-    loading, loadButton.Text = false, "Load"
-    installSong(Core.parse(data), name or "MIDI data")
+    local song = Core.parse(data)
+    closeFileList()
+    cancelLoading(true)
+    installSong(song, name or "MIDI data")
 end
+function api:EnqueueFile(path) assert(alive, "Player was destroyed"); return enqueueSource(path, "File") end
+function api:EnqueueURL(url) assert(alive, "Player was destroyed"); return enqueueSource(url, "URL") end
+function api:EnqueueBase64(data) assert(alive, "Player was destroyed"); return enqueueSource(data, "Base64") end
+function api:GetQueue()
+    local result = {}
+    if queuedLoading then result[1] = {id = queuedLoading.id, name = queuedLoading.name, mode = queuedLoading.mode, loading = true} end
+    for _, item in ipairs(queue) do result[#result + 1] = {id = item.id, name = item.name, mode = item.mode, loading = false} end
+    return result
+end
+function api:RemoveQueued(index)
+    assert(alive and finite(index) and index % 1 == 0 and index >= 1 and index <= queueCount(), "Unknown queue index")
+    if queuedLoading and index == 1 then cancelLoading(false)
+    else table.remove(queue, index - (queuedLoading and 1 or 0)); refreshQueue() end
+end
+function api:Next() assert(alive, "Player was destroyed"); advanceQueue() end
+function api:ClearQueue() assert(alive, "Player was destroyed"); clearQueue() end
+function api:RefreshFiles() assert(alive, "Player was destroyed"); return refreshFiles() end
 function api:SetTrack(index, muted, solo)
     assert(alive and player.song and player.song.tracks[index], "Unknown track index")
     local track = player.song.tracks[index]
@@ -1430,6 +1618,7 @@ end
 function api:Status()
     local midiBpm = bpmNow()
     return { playing = player.playing, pending = pendingPlay, position = player.position,
+        loading = loading, queueLoading = queueJob, queueCount = queueCount(), song = player.song and songLabel.Text or nil,
         duration = player.song and player.song.duration or 0, backend = backend.name,
         speed = player.speed, transpose = player.transpose, skippedNotes = player.skipped, resyncs = player.resyncs,
         source = loadedSource and loadedSource.path or nil, binarySafe = loadedSource and loadedSource.binarySafe or false,
@@ -1447,7 +1636,9 @@ connect(RunService.Heartbeat, safely(function(delta)
     if gui.Parent == nil then api:Destroy(); return end
     local wasPlaying = player.playing
     player:step(delta)
-    if wasPlaying and not player.playing then status("Finished. All piano keys released.") end
+    if wasPlaying and not player.playing then
+        if #queue > 0 then advanceQueue() else status("Finished. All piano keys released.") end
+    end
     uiElapsed = uiElapsed + delta
     if uiElapsed < 0.1 then return end
     uiElapsed = 0
@@ -1763,5 +1954,194 @@ test("enabling background switches a native adapter to virtual input", function(
     api:Destroy()
     appActive = true
     UserInputService.WindowFocused:Fire()
+end)
+local function newQueuePlayer(config)
+    if api then api:Destroy() end
+    environment.MIDIPlusPlusConfig = config or {}
+    appActive, holdHttp = true, false
+    keypress, keyrelease = nil, nil
+    fileData, httpData = TestCore.decodeBase64("TVRoZAAAAAYAAAABAeBNVHJrAAAAsQD/AxBNSURJKysgTHVhdSBEZW1vAP9RAwehIACQPFqCaIA8AHj/AQAAkEBagmiAQAB4/wEAAJBDWoJogEMAeP8BAACQSFqCaIBIAHj/AQAAkENagmiAQwB4/wEAAJBAWoJogEAAeP8BAACQPlqCaIA+AHj/AQAAkEFagmiAQQB4/wEAALBAfwCQPGQAkEBkAJBDZACQSGSDYIA8AACAQAAAgEMAAIBIAINgsEAAAP8vAA=="), TestCore.decodeBase64("TVRoZAAAAAYAAAABAeBNVHJrAAAAsQD/AxBNSURJKysgTHVhdSBEZW1vAP9RAwehIACQPFqCaIA8AHj/AQAAkEBagmiAQAB4/wEAAJBDWoJogEMAeP8BAACQSFqCaIBIAHj/AQAAkENagmiAQwB4/wEAAJBAWoJogEAAeP8BAACQPlqCaIA+AHj/AQAAkEFagmiAQQB4/wEAALBAfwCQPGQAkEBkAJBDZACQSGSDYIA8AACAQAAAgEMAAIBIAINgsEAAAP8vAA==")
+    api = runScript()
+    return api
+end
+local function finishSong()
+    api:Seek(4.9)
+    RunService.Heartbeat:Fire(0.2)
+end
+
+test("queue starts without a manually loaded song and advances in order", function()
+    newQueuePlayer()
+    api:EnqueueFile("MIDIPlusPlus/song.mid")
+    api:EnqueueURL("https://example.test/song.mid")
+    api:EnqueueBase64("TVRoZAAAAAYAAAABAeBNVHJrAAAAsQD/AxBNSURJKysgTHVhdSBEZW1vAP9RAwehIACQPFqCaIA8AHj/AQAAkEBagmiAQAB4/wEAAJBDWoJogEMAeP8BAACQSFqCaIBIAHj/AQAAkENagmiAQwB4/wEAAJBAWoJogEAAeP8BAACQPlqCaIA+AHj/AQAAkEFagmiAQQB4/wEAALBAfwCQPGQAkEBkAJBDZACQSGSDYIA8AACAQAAAgEMAAIBIAINgsEAAAP8vAA==")
+    assert(api:Status().queueCount == 3)
+    api:Play(); flushTimers(); RunService.Heartbeat:Fire(0.1)
+    assert(api:Status().playing and api:Status().queueCount == 2 and api:Status().song == "song.mid")
+    finishSong(); assert(api:Status().pending and api:Status().queueCount == 1)
+    flushTimers(); assert(api:Status().playing and api:GetQueue()[1].mode == "Base64")
+    finishSong(); flushTimers()
+    assert(api:Status().song == "Base64 MIDI" and api:Status().queueCount == 0)
+    finishSong()
+    assert(not api:Status().playing and not api:Status().pending and count(physicallyDown) == 0)
+end)
+
+test("adding to the queue leaves the current song playing", function()
+    newQueuePlayer(); findButton("Load demo").Activated:Fire()
+    api:Play(); flushTimers(); RunService.Heartbeat:Fire(0.1)
+    local before = api:Status().position
+    findButton("+ Queue").Activated:Fire()
+    assert(api:Status().playing and api:Status().position == before and api:Status().queueCount == 1)
+    assert(count(physicallyDown) == 1)
+    api:Stop()
+end)
+
+test("Refresh discovers a newly copied Queen file with spaces while playing", function()
+    newQueuePlayer(); findButton("Load demo").Activated:Fire()
+    local oldListing = fileListing
+    findButton("Refresh").Activated:Fire()
+    local queen = "MIDIPlusPlus/Queen - Bohemian Rhapsody.mid"
+    assert(not findButton(queen))
+    api:Play(); flushTimers(); RunService.Heartbeat:Fire(0.1)
+    local before = api:Status().position
+    fileListing = {queen .. ".b64", queen, "MIDIPlusPlus/no.txt"}
+    fileOverrides[queen .. ".b64"] = "TVRoZAAAAAYAAAABAeBNVHJrAAAAsQD/AxBNSURJKysgTHVhdSBEZW1vAP9RAwehIACQPFqCaIA8AHj/AQAAkEBagmiAQAB4/wEAAJBDWoJogEMAeP8BAACQSFqCaIBIAHj/AQAAkENagmiAQwB4/wEAAJBAWoJogEAAeP8BAACQPlqCaIA+AHj/AQAAkEFagmiAQQB4/wEAALBAfwCQPGQAkEBkAJBDZACQSGSDYIA8AACAQAAAgEMAAIBIAINgsEAAAP8vAA=="
+    findButton("Refresh").Activated:Fire()
+    assert(findButton(queen) and not findButton(queen .. ".b64"))
+    assert(api:Status().playing and api:Status().position == before and count(physicallyDown) == 1)
+    local menu = findButton(queen).Parent
+    findButton("+ Queue", menu).Activated:Fire()
+    assert(api:GetQueue()[1].name == "Queen - Bohemian Rhapsody.mid" and findButton(queen))
+    findButton(queen).Activated:Fire(); findButton("Load").Activated:Fire()
+    assert(api:Status().song == "Queen - Bohemian Rhapsody.mid" and api:Status().binarySafe)
+    fileListing, fileOverrides[queen .. ".b64"] = oldListing, nil
+end)
+
+test("Queue all sorts the refreshed file list and hides duplicate sidecars", function()
+    newQueuePlayer()
+    local oldListing = fileListing
+    fileListing = {"MIDIPlusPlus/z.mid.b64", "MIDIPlusPlus/a.MID.b64", "./MIDIPlusPlus/a.MID", "MIDIPlusPlus/no.txt"}
+    findButton("Queue all").Activated:Fire()
+    local items = api:GetQueue()
+    assert(#items == 2 and items[1].name == "a.MID" and items[2].name == "z.mid.b64")
+    findButton("Remove").Activated:Fire()
+    assert(api:Status().queueCount == 1 and api:GetQueue()[1].name == "z.mid.b64")
+    findButton("Clear queue").Activated:Fire(); assert(api:Status().queueCount == 0)
+    fileListing = oldListing
+end)
+
+test("queue rejects empty sources and enforces its bound without stopping playback", function()
+    newQueuePlayer(); findButton("Load demo").Activated:Fire()
+    api:Play(); flushTimers(); RunService.Heartbeat:Fire(0.1)
+    assert(not api:EnqueueFile(" "))
+    for _ = 1, 128 do assert(api:EnqueueFile("MIDIPlusPlus/song.mid")) end
+    local id, err = api:EnqueueFile("MIDIPlusPlus/song.mid")
+    assert(not id and err:find("128", 1, true) and api:Status().playing and api:Status().queueCount == 128)
+    local snapshot = api:GetQueue(); snapshot[1].name = "changed"; table.clear(snapshot)
+    assert(#api:GetQueue() == 128 and api:GetQueue()[1].name == "song.mid")
+    api:ClearQueue(); assert(api:Status().playing and count(physicallyDown) == 1)
+    api:Stop()
+end)
+
+test("queue skips missing or malformed songs and starts the next valid song", function()
+    newQueuePlayer()
+    api:EnqueueFile("missing.mid")
+    api:EnqueueBase64("invalid!")
+    api:EnqueueFile("MIDIPlusPlus/song.mid")
+    local beforeWarnings = #warningLog
+    api:Next(); flushTimers(); RunService.Heartbeat:Fire(0.1)
+    assert(api:Status().playing and api:Status().queueCount == 0 and api:Status().song == "song.mid")
+    assert(#warningLog == beforeWarnings + 2)
+    api:Stop(); api:EnqueueFile("missing.mid"); api:Next(); flushTimers()
+    assert(not api:Status().loading and not api:Status().pending and not api:Status().playing)
+    assert(api:Status().queueCount == 0 and count(physicallyDown) == 0)
+end)
+
+test("Loop holds the current song and Next overrides it", function()
+    newQueuePlayer({Loop = true})
+    findButton("Load demo").Activated:Fire()
+    api:EnqueueFile("MIDIPlusPlus/song.mid")
+    api:Play(); flushTimers(); finishSong()
+    assert(api:Status().playing and api:Status().queueCount == 1 and api:Status().position == 0)
+    findButton("Next").Activated:Fire(); flushTimers()
+    assert(api:Status().playing and api:Status().song == "song.mid" and api:Status().queueCount == 0)
+    assert(findText("UP NEXT  (0)  /  Loop repeats current song"))
+    findButton("[ON]   Loop").Activated:Fire()
+    assert(findText("UP NEXT  (0)  /  Plays in order"))
+end)
+
+test("Stop cancels the automatic next-song countdown and keeps pending songs", function()
+    newQueuePlayer(); findButton("Load demo").Activated:Fire()
+    api:EnqueueFile("MIDIPlusPlus/song.mid"); api:EnqueueBase64("TVRoZAAAAAYAAAABAeBNVHJrAAAAsQD/AxBNSURJKysgTHVhdSBEZW1vAP9RAwehIACQPFqCaIA8AHj/AQAAkEBagmiAQAB4/wEAAJBDWoJogEMAeP8BAACQSFqCaIBIAHj/AQAAkENagmiAQwB4/wEAAJBAWoJogEAAeP8BAACQPlqCaIA+AHj/AQAAkEFagmiAQQB4/wEAALBAfwCQPGQAkEBkAJBDZACQSGSDYIA8AACAQAAAgEMAAIBIAINgsEAAAP8vAA==")
+    api:Play(); flushTimers(); finishSong()
+    assert(api:Status().pending and api:Status().queueCount == 1)
+    api:Stop(); flushTimers(); RunService.Heartbeat:Fire(0.1)
+    assert(not api:Status().playing and not api:Status().pending and api:Status().queueCount == 1)
+    assert(count(physicallyDown) == 0 and api:Status().position == 0)
+end)
+
+test("Pause cancels an in-flight queued HTTP load and preserves its order", function()
+    newQueuePlayer()
+    api:EnqueueURL("https://example.test/song.mid"); api:EnqueueBase64("TVRoZAAAAAYAAAABAeBNVHJrAAAAsQD/AxBNSURJKysgTHVhdSBEZW1vAP9RAwehIACQPFqCaIA8AHj/AQAAkEBagmiAQAB4/wEAAJBDWoJogEMAeP8BAACQSFqCaIBIAHj/AQAAkENagmiAQwB4/wEAAJBAWoJogEAAeP8BAACQPlqCaIA+AHj/AQAAkEFagmiAQQB4/wEAALBAfwCQPGQAkEBkAJBDZACQSGSDYIA8AACAQAAAgEMAAIBIAINgsEAAAP8vAA==")
+    holdHttp = true; api:Next()
+    assert(api:Status().loading and api:GetQueue()[1].loading and api:Status().queueCount == 2)
+    api:Pause(); assert(not api:Status().loading and api:Status().queueCount == 2)
+    holdHttp = false; flushHttp(); flushTimers()
+    assert(not api:Status().playing and not api:Status().pending and not api:Status().song)
+    api:Play(); flushTimers()
+    assert(api:Status().playing and api:Status().queueCount == 1 and api:GetQueue()[1].mode == "Base64")
+end)
+
+test("Next skips a downloading entry and ignores its late HTTP response", function()
+    newQueuePlayer()
+    api:EnqueueURL("https://example.test/song.mid"); api:EnqueueBase64("TVRoZAAAAAYAAAABAeBNVHJrAAAAsQD/AxBNSURJKysgTHVhdSBEZW1vAP9RAwehIACQPFqCaIA8AHj/AQAAkEBagmiAQAB4/wEAAJBDWoJogEMAeP8BAACQSFqCaIBIAHj/AQAAkENagmiAQwB4/wEAAJBAWoJogEAAeP8BAACQPlqCaIA+AHj/AQAAkEFagmiAQQB4/wEAALBAfwCQPGQAkEBkAJBDZACQSGSDYIA8AACAQAAAgEMAAIBIAINgsEAAAP8vAA==")
+    holdHttp = true; api:Next(); api:Next(); flushTimers()
+    assert(api:Status().song == "Base64 MIDI" and api:Status().playing and api:Status().queueCount == 0)
+    holdHttp = false; flushHttp()
+    assert(api:Status().song == "Base64 MIDI" and api:Status().playing)
+end)
+
+test("Clear queue cancels a downloading entry without starting it later", function()
+    newQueuePlayer(); api:EnqueueURL("https://example.test/song.mid")
+    holdHttp = true; api:Next(); api:ClearQueue()
+    holdHttp = false; flushHttp(); flushTimers()
+    assert(api:Status().queueCount == 0 and not api:Status().loading and not api:Status().pending)
+    assert(not api:Status().playing and count(physicallyDown) == 0)
+end)
+
+test("manual load replaces a queued HTTP job and keeps that entry for later", function()
+    newQueuePlayer(); api:EnqueueURL("https://example.test/song.mid")
+    holdHttp = true; api:Next(); api:LoadData(fileData, "Manual song")
+    holdHttp = false; flushHttp(); flushTimers()
+    assert(api:Status().song == "Manual song" and api:Status().queueCount == 1 and not api:Status().pending)
+    assert(api:GetQueue()[1].mode == "URL" and not api:GetQueue()[1].loading)
+end)
+
+test("RemoveQueued cancels a downloading entry and leaves the following songs", function()
+    newQueuePlayer(); api:EnqueueURL("https://example.test/song.mid"); api:EnqueueBase64("TVRoZAAAAAYAAAABAeBNVHJrAAAAsQD/AxBNSURJKysgTHVhdSBEZW1vAP9RAwehIACQPFqCaIA8AHj/AQAAkEBagmiAQAB4/wEAAJBDWoJogEMAeP8BAACQSFqCaIBIAHj/AQAAkENagmiAQwB4/wEAAJBAWoJogEAAeP8BAACQPlqCaIA+AHj/AQAAkEFagmiAQQB4/wEAALBAfwCQPGQAkEBkAJBDZACQSGSDYIA8AACAQAAAgEMAAIBIAINgsEAAAP8vAA==")
+    holdHttp = true; api:Next(); api:RemoveQueued(1)
+    holdHttp = false; flushHttp(); flushTimers()
+    assert(api:Status().queueCount == 1 and api:GetQueue()[1].mode == "Base64" and not api:Status().loading)
+    assert(not pcall(function() api:RemoveQueued(2) end))
+    api:Next(); flushTimers(); assert(api:Status().playing and api:Status().song == "Base64 MIDI")
+end)
+
+test("typing pauses a queued download while background focus loss can keep it running", function()
+    newQueuePlayer(); api:EnqueueURL("https://example.test/song.mid")
+    holdHttp = true; api:Next()
+    appActive = false; UserInputService.WindowFocusReleased:Fire()
+    assert(api:Status().queueLoading)
+    UserInputService.TextBoxFocused:Fire({})
+    assert(not api:Status().loading and api:Status().queueCount == 1)
+    holdHttp = false; flushHttp(); flushTimers()
+    assert(not api:Status().playing)
+    appActive = true; UserInputService.WindowFocused:Fire()
+end)
+
+test("Destroy invalidates a queued download and clears its connections", function()
+    newQueuePlayer(); api:EnqueueURL("https://example.test/song.mid")
+    holdHttp = true; api:Next(); api:Destroy()
+    holdHttp = false; flushHttp(); flushTimers(); RunService.Heartbeat:Fire(0.1)
+    assert(environment.MIDIPlusPlus == nil and count(physicallyDown) == 0)
+    assert(api:Status().queueCount == 0 and not api:Status().playing)
 end)
 print(string.format("%d integration tests passed (mock Roblox / executor)", tests))

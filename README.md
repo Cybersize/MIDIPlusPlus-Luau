@@ -7,7 +7,7 @@ A Roblox Luau MIDI piano player inspired by [Zephkek/MIDIPlusPlus](https://githu
 Paste this into Xeno's script editor and execute it in Roblox:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/Cybersize/MIDIPlusPlus-Luau/main/MIDIPlusPlus.lua?v=1.0.3"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Cybersize/MIDIPlusPlus-Luau/main/MIDIPlusPlus.lua?v=1.0.4"))()
 ```
 
 1. The loader downloads the player from this repository and opens its GUI.
@@ -16,11 +16,21 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/Cybersize/MIDIPlusPlu
 4. Put your own MIDI file in the executor's workspace, for example `workspace/MIDIPlusPlus/song.mid`. For Xeno, run the included `Convert-MIDI.cmd` once to create text-safe copies beside your MIDI files (requires Python 3). Use the executor's actual workspace folder; its location varies by installation.
 5. Enter `MIDIPlusPlus/song.mid` in the player's **File** field, click **Load**, and click **Play**.
 
-You can also select **URL** and paste a direct link to a binary `.mid` file, or select **Base64** and paste encoded MIDI bytes. A GitHub file-view URL or a YouTube URL is not a MIDI download. **Files** lists MIDI files inside the `MIDIPlusPlus` workspace folder when `listfiles` is available.
+You can also select **URL** and paste a direct link to a binary `.mid` file, or select **Base64** and paste encoded MIDI bytes. A GitHub file-view URL or a YouTube URL is not a MIDI download. **Files** lists MIDI files inside the `MIDIPlusPlus` workspace folder when `listfiles` is available. **Refresh** rescans the folder and opens the updated list while the current song keeps playing.
 
 The included `demo.mid` is the same original short melody as the built-in demo. The entrypoint downloads `lib/Core.lua` and `lib/Player.lua` from one fixed source commit, so both libraries use the same version. No third-party UI library is used. Song URLs load MIDI data only.
 
 If you prefer a self-contained file, copy the entire contents of `MIDIPlusPlus-standalone.lua` into the executor instead. It contains the same player and does not download code. `Loader.lua` contains the short GitHub startup command; library files are dependencies and are not run directly.
+
+## Queue songs and refresh the list
+
+Version 1.0.4 adds an **UP NEXT** queue. Click **Files** or **Refresh**, then **+ Queue** beside each song in the order you want. The menu stays open so you can add several songs. The **+ Queue** beside the source field also adds a typed File, URL, or Base64 source. **Queue all** rescans the folder and adds its songs in filename order, hiding duplicate `.b64` sidecars.
+
+Press **Play** to begin. If a song is already loaded, it plays first; **Next** skips directly to the first queued song. Each song automatically advances to the next with a 0.5-second gap. **Remove** deletes an individual pending entry; **Clear queue** removes all pending songs. Adding songs, clearing pending entries, and refreshing the file list keep the current song playing. The queue holds up to 128 entries and loads each MIDI when its turn arrives. Unreadable entries are skipped; check the executor console for the failed filename and reason.
+
+**Pause**, **Stop**, typing in a Roblox text box, and applicable focus checks cancel pending starts. If a queued song is still downloading, Pause/Stop cancels its pending playback and returns the entry to the front of the queue. Late download results cannot restart the player. **Loop ON** repeats the current song; turn it off for automatic queue progression or use **Next** to skip. Loading another song manually keeps pending queue entries. Closing or rerunning the player clears the queue.
+
+**Refresh** scans only the configured executor folder, not your Downloads folder. If a file such as `Queen - Bohemian Rhapsody.mid` is missing, copy it into `workspace/MIDIPlusPlus`, run `Convert-MIDI.cmd` for Xeno, and click **Refresh**. Spaces and hyphens in filenames are supported. Files ending in `.mid`, `.midi`, `.rmi`, and their `.b64` sidecars are listed directly inside that folder; subfolders are not scanned recursively.
 
 ## Fix for incomplete binary reads in Xeno
 
@@ -59,6 +69,10 @@ Continue choosing `song.mid` in the player: a matching `.mid.b64` file is prefer
 | Input | Cycle the available keyboard output modes |
 | Test keys | Send T, U, O and report how many key events reach Roblox |
 | Background ON/OFF | Keep virtual-input playback running after switching away from Roblox |
+| Files / Refresh | Open the MIDI folder list / rescan it for newly added files |
+| + Queue / Queue all | Append one source / append the folder's songs in filename order |
+| Next | Skip the current or downloading song and start the next queued song |
+| Remove / Clear queue | Delete one pending entry / clear all pending entries |
 
 Drag the title bar to move the window. Minimize with `_`. Close with `X` to release input and unload the script. Executing the script again replaces the previous instance.
 
@@ -124,6 +138,7 @@ getgenv().MIDIPlusPlusConfig = {
     DefaultFile = "MIDIPlusPlus/song.mid",
     Folder = "MIDIPlusPlus",
     StartDelay = 1.5,
+    QueueDelay = 0.5, -- countdown before each queued song (0 to 10 seconds)
     Full88Keys = false,
     SkipDrums = true,
     FoldOutOfRange = false,
@@ -172,8 +187,17 @@ midi:Stop()
 midi:SetBackend("VirtualInput") -- pause and select an available input mode
 midi:TestInput() -- three-note test; results are in midi:Status().inputTest
 midi:SetBackgroundPlayback(true) -- pauses; selects virtual input when available
+midi:EnqueueFile("MIDIPlusPlus/next song.mid") -- returns entry ID, or nil + error
+-- midi:EnqueueURL("https://your-host.example/next.mid")
+-- midi:EnqueueBase64("...")
+print(midi:GetQueue()) -- ordered snapshots: id, name, mode, loading
+midi:RemoveQueued(1) -- index in GetQueue(), including an entry currently loading
+midi:Next() -- starts the next queued song after QueueDelay
+-- midi:ClearQueue()
+-- midi:RefreshFiles() -- rescans, opens the menu, and returns the file paths
 print(midi:Status().backend)
 print(midi:Status().midiBpm, midi:Status().bpm) -- original / speed-adjusted tempo
+print(midi:Status().song, midi:Status().queueCount, midi:Status().loading)
 -- midi:Destroy()
 ```
 
@@ -192,7 +216,7 @@ File/URL/Base64 loading is asynchronous. Wait until the UI reports that loading 
 
 ## Validation and source
 
-The parser/playback core passed 29 tests with the official Luau CLI. The full script passed 31 integration tests using mock Roblox services and executor APIs to check UI wiring, loading, input selection, proxy compatibility, input observation, BPM, background behavior, and cleanup. The GitHub entrypoint is also tested with mocked HTTP requests. The base64 loading path was checked with 13 real MIDI files, including files whose bytes are truncated by a simulated text-mode reader. These are local checks; real game compatibility and visual behavior need an in-game run.
+The parser/playback core passed 29 tests with the official Luau CLI. The full script passed 46 integration tests using mock Roblox services and executor APIs to check UI wiring, loading, input selection, proxy compatibility, input observation, BPM, background behavior, queues, file refresh, download cancellation, and cleanup. The GitHub entrypoint is also tested with mocked HTTP requests. The base64 loading path was checked with 14 real MIDI files, including files whose bytes are truncated by a simulated text-mode reader and `Queen - Bohemian Rhapsody.mid`. These are local checks; real game compatibility and visual behavior need an in-game run.
 
 To run the included parser and converter regressions locally:
 
