@@ -7,7 +7,7 @@ A Roblox Luau MIDI piano player inspired by [Zephkek/MIDIPlusPlus](https://githu
 Paste this into Xeno's script editor and execute it in Roblox:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/Cybersize/MIDIPlusPlus-Luau/main/MIDIPlusPlus.lua?v=1.0.2"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Cybersize/MIDIPlusPlus-Luau/main/MIDIPlusPlus.lua?v=1.0.3"))()
 ```
 
 1. The loader downloads the player from this repository and opens its GUI.
@@ -58,19 +58,30 @@ Continue choosing `song.mid` in the player: a matching `.mid.b64` file is prefer
 | Loop | Repeat the song |
 | Input | Cycle the available keyboard output modes |
 | Test keys | Send T, U, O and report how many key events reach Roblox |
+| Background ON/OFF | Keep virtual-input playback running after switching away from Roblox |
 
 Drag the title bar to move the window. Minimize with `_`. Close with `X` to release input and unload the script. Executing the script again replaces the previous instance.
 
-Typing in a Roblox text box pauses playback. By default, switching away from Roblox also pauses playback. Press Play/F6 to resume. Seeking and resuming reconstruct held notes and MIDI pedal state; already-released notes under a pedal are retriggered to approximate their tails.
+Typing in a Roblox text box pauses playback. Background playback is enabled by default for virtual input; turn it off with the title-bar button to pause when switching away from Roblox. Press Play/F6 to resume a paused song. Seeking and resuming reconstruct held notes and MIDI pedal state; already-released notes under a pedal are retriggered to approximate their tails.
+
+## Play while Roblox is unfocused
+
+Version 1.0.3 adds **Background** in the title bar. With **Background: ON** and a virtual-input backend selected, the song, start countdown, and Test keys continue after Alt+Tab. Auto mode prefers virtual input when background playback is enabled. Enabling Background while using another adapter selects virtual input when it is available.
+
+Open the piano, start the song, and switch to another window. To check delivery, click **Test keys** and switch away during its countdown; after it finishes, return to Roblox to read the result. Roblox or a game's piano can still reject input while unfocused, and a minimized client can throttle playback. Live background playback has not been verified by the local mock tests.
+
+Native `Executor` and arbitrary custom SendKey adapters remain subject to focus checks in this player. They pause on focus loss, and the player prevents new foreground key presses while it detects Roblox is inactive. Use **VirtualInput** or **VirtualInputService** for background playback. **Background: N/A** means the selected adapter cannot provide background input in this player. The title-bar button can select an available virtual adapter.
+
+To stop, return to Roblox and click Stop/Panic or press F4. The script's hotkeys listen inside Roblox.
 
 ## If the piano is silent
 
-First confirm that pressing **T** manually plays a note while the piano is open. Click **Test keys** and keep Roblox focused for the countdown. The test sends T, U, O one at a time. It works without loading a MIDI.
+First confirm that pressing **T** manually plays a note while the piano is open. Click **Test keys**; initially test with Roblox focused. The test sends T, U, O one at a time. It works without loading a MIDI. Once focused input works, repeat while unfocused with **Background: ON**.
 
 - **3/3 keys reached Roblox:** keyboard events were observed by UserInputService. If the piano remains silent, check the game's active piano, keyboard layout, and any UI consuming input. Receiving a key event does not prove that the game's sound handler accepted it.
 - **Keys sent; Roblox received none:** select the next **Input** mode and test again. Some executor functions exist but perform no input.
 - **Input error:** the selected API is unavailable or denied in that session. Select another Input mode.
-- **Paused/focus message:** click the Roblox game window and press F6. Playing from a separate executor window can leave Roblox unfocused.
+- **Paused/focus message:** enable Background with a virtual-input mode, or click the Roblox game window and press F6. Foreground key adapters require Roblox focus.
 
 Version 1.0.2 passes a real Roblox Instance to virtual-input methods instead of the executor's `game` proxy. It prefers a dedicated VirtualInputManager instance and offers the service instance as a separate mode. When `identifyexecutor` reports Xeno, Auto prefers virtual input over native key functions. [Published Xeno source](https://github.com/tyronetheqt/Xeno/blob/main/Xeno/include/client.lua) illustrates the game proxy and dedicated virtual input object; behavior can vary by executor release.
 
@@ -90,7 +101,7 @@ Your piano must support the same layout. Enable the game's 88-key mode before en
 
 This version targets the common APIs used by Xeno-style executor environments. GUI initialization has been observed in Xeno; end-to-end piano playback remains unverified by the automated checks. Passing in one executor does not establish compatibility with every other executor.
 
-The default **Auto** backend prefers a dedicated VirtualInputManager for detected Xeno sessions. Other environments use `keypress` and `keyrelease` when both exist, or virtual input otherwise. It can fall back when the first native input call raises an error. A failed first virtual-input call can try the service object in Auto mode. **Test keys** checks for observed Roblox key events to help expose silent no-ops. Roblox documents VirtualInputManager as an internal service; access depends on the executor's permissions.
+The default **Auto** backend prefers a dedicated VirtualInputManager when background playback is enabled or Xeno is detected. In other foreground sessions it uses `keypress` and `keyrelease` when both exist, or virtual input otherwise. It can fall back when the first native input call raises an error. A failed first virtual-input call can try the service object in Auto mode. **Test keys** checks for observed Roblox key events to help expose silent no-ops. Roblox documents VirtualInputManager as an internal service; access depends on the executor's permissions.
 
 If Play shows an input error, or no notes are heard, use the **Input** button to switch backends and click **Test keys**. The status line reports input errors and the selected backend. If no backend is permitted, a plain script cannot provide keyboard input in that environment.
 
@@ -123,7 +134,7 @@ getgenv().MIDIPlusPlusConfig = {
     Speed = 1,
     Transpose = 0,
     Loop = false,
-    PauseOnFocusLoss = true,
+    BackgroundPlayback = true,
     Hotkeys = true,
     Keymap = {
         -- Keys are MIDI note numbers; entries override the chosen layout.
@@ -136,6 +147,8 @@ getgenv().MIDIPlusPlusConfig = {
 ```
 
 You can change the input backend with the GUI's **Input** button, or set `Backend` in the startup config. Other configuration settings are read at initialization. Changing the configuration table after execution does not update an existing player.
+
+Background mode can also be changed at runtime with the title-bar button or `SetBackgroundPlayback`. The old `PauseOnFocusLoss` option is used only when `BackgroundPlayback` is absent: true disables background, false enables it. With neither setting supplied, background is enabled.
 
 If adapting to another keyboard API, supply `SendKey = function(keyCode, isDown, virtualKeyCode) ... end` in the config. This takes priority over Backend. The function must return promptly, preserve key order, and raise an error when input fails. Mapping entries support a letter, digit, common US punctuation, Space, Tab, Enter, Backspace, Delete, Escape, arrow key, or F1–F12, optionally prefixed with `ctrl+`, `shift+`, or `alt+`. Do not map note keys to the pedal key or modifier keys. Disable Hotkeys when mapping notes to F4/F6/F7/F8.
 
@@ -158,6 +171,7 @@ midi:Pause()
 midi:Stop()
 midi:SetBackend("VirtualInput") -- pause and select an available input mode
 midi:TestInput() -- three-note test; results are in midi:Status().inputTest
+midi:SetBackgroundPlayback(true) -- pauses; selects virtual input when available
 print(midi:Status().backend)
 print(midi:Status().midiBpm, midi:Status().bpm) -- original / speed-adjusted tempo
 -- midi:Destroy()
@@ -178,7 +192,7 @@ File/URL/Base64 loading is asynchronous. Wait until the UI reports that loading 
 
 ## Validation and source
 
-The parser/playback core passed 29 tests with the official Luau CLI. The full script passed 25 integration tests using mock Roblox services and executor APIs to check UI wiring, loading, input selection, proxy compatibility, input observation, BPM, and cleanup. The GitHub entrypoint is also tested with mocked HTTP requests. The base64 loading path was checked with 13 real MIDI files, including files whose bytes are truncated by a simulated text-mode reader. These are local checks; real game compatibility and visual behavior need an in-game run.
+The parser/playback core passed 29 tests with the official Luau CLI. The full script passed 31 integration tests using mock Roblox services and executor APIs to check UI wiring, loading, input selection, proxy compatibility, input observation, BPM, background behavior, and cleanup. The GitHub entrypoint is also tested with mocked HTTP requests. The base64 loading path was checked with 13 real MIDI files, including files whose bytes are truncated by a simulated text-mode reader. These are local checks; real game compatibility and visual behavior need an in-game run.
 
 To run the included parser and converter regressions locally:
 

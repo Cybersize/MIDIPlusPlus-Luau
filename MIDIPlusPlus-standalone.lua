@@ -1,4 +1,4 @@
--- MIDI++ Luau 1.0.2
+-- MIDI++ Luau 1.0.3
 -- SPDX-License-Identifier: GPL-3.0-only
 -- Piano layouts and velocity curves adapted from Zephkek/MIDIPlusPlus.
 -- https://github.com/Zephkek/MIDIPlusPlus
@@ -446,12 +446,14 @@ if type(previous) == "table" and type(previous.Destroy) == "function" then pcall
 local function finite(value) return type(value) == "number" and value == value and math.abs(value) < math.huge end
 local function trim(value) return value:match("^%s*(.-)%s*$") end
 local function bool(value, default) if type(value) == "boolean" then return value end; return default end
+local backgroundPlayback = bool(Config.BackgroundPlayback, not bool(Config.PauseOnFocusLoss, false))
+local appHasFocus = true
 local function windowFocused()
     if type(isrbxactive) == "function" then
         local ok, active = pcall(isrbxactive)
         if ok and type(active) == "boolean" then return active end
     end
-    return true
+    return appHasFocus
 end
 
 -- Executors disagree about input APIs. All availability checks are local; no
@@ -477,11 +479,17 @@ function backend:select(mode)
     elseif mode == "VirtualInput" and virtualInput then self.name = "VirtualInput"
     elseif mode == "VirtualInputService" and virtualInputService then self.name = "VirtualInputService"
     elseif mode == "Auto" then
-        if executorName:find("xeno", 1, true) and virtualInput then self.name = "VirtualInput"
+        if (backgroundPlayback or executorName:find("xeno", 1, true)) and virtualInput then self.name = "VirtualInput"
         elseif nativeAvailable then self.name = "Executor"
         elseif virtualInput then self.name = "VirtualInput" end
     end
     return self.name ~= "Unavailable"
+end
+function backend:canBackground()
+    return self.name == "VirtualInput" or self.name == "VirtualInputService"
+end
+local function maySendInput()
+    return windowFocused() or (backgroundPlayback and backend:canBackground())
 end
 backend:select(type(Config.SendKey) == "function" and "Custom" or requestedBackend)
 function backend:sendVirtual(info, down)
@@ -493,6 +501,9 @@ function backend:sendVirtual(info, down)
     elseif not ok then error("Virtual input failed: " .. tostring(err), 0) end
 end
 function backend:send(info, down)
+    if down and not maySendInput() then
+        error("This input mode needs Roblox focused. Enable Background with virtual input.", 0)
+    end
     if self.name == "Custom" then
         Config.SendKey(info.code, down, info.vk)
     elseif self.name == "Executor" then
@@ -569,6 +580,13 @@ function Keyboard:raw(info, down)
     if not down then self.touched[info.vk] = nil end
 end
 function Keyboard:key(info, down)
+    -- Foreground-only adapters still need to release held keys after focus loss.
+    -- Avoid fresh modifier presses during that cleanup.
+    if not down and not windowFocused() and not backend:canBackground() then
+        self:raw(info, false)
+        for _, modifier in ipairs(info.mods or {}) do self:raw(modifier, false) end
+        return
+    end
     for _, modifier in ipairs(info.mods or {}) do self:raw(modifier, true) end
     self:raw(info, down)
     for i = #(info.mods or {}), 1, -1 do self:raw(info.mods[i], false) end
@@ -728,7 +746,14 @@ end
 
 local header = make("Frame", {Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1, Active = true}, window)
 label(header, "MIDI++", 22, 10, 140, 25, 23, colors.accent).Font = Enum.Font.GothamBold
-label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.2", 23, 37, 360, 16, 10, colors.muted)
+label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.3", 23, 37, 360, 16, 10, colors.muted)
+local backgroundButton = button(header, "", 365, 16, 174, 30)
+local function refreshBackgroundButton()
+    backgroundButton.Text = backgroundPlayback and (backend:canBackground() and "Background: ON" or "Background: N/A")
+        or "Background: OFF"
+    backgroundButton.TextColor3 = backgroundPlayback and backend:canBackground() and colors.accent or colors.muted
+end
+refreshBackgroundButton()
 local minimize = button(header, "_", 548, 16, 30, 30)
 local close = button(header, "X", 586, 16, 30, 30)
 local body = make("Frame", {Position = UDim2.fromOffset(0, 62), Size = UDim2.fromOffset(640, 580), BackgroundTransparency = 1}, window)
@@ -984,14 +1009,15 @@ local function startOrPause()
     local version = playVersion
     pendingPlay = true
     local delay = finite(Config.StartDelay) and math.clamp(Config.StartDelay, 0, 10) or 1.5
-    status(string.format("Starting in %.1fs. Focus the game's piano.", delay))
+    status(string.format("Starting in %.1fs. %s", delay, backgroundPlayback and backend:canBackground()
+        and "Background playback enabled." or "Focus the game's piano."))
     task.delay(delay, safely(function()
         if version ~= playVersion or not pendingPlay then return end
         pendingPlay = false
-        if not windowFocused() then status("Focus the Roblox game window, then press F6 to play.", true); return end
+        if not maySendInput() then status("This Input needs Roblox focused. Choose virtual input for background playback.", true); return end
         if UserInputService:GetFocusedTextBox() then status("Close the text box before playing.", true); return end
         local ok, message = player:play()
-        status(ok and ("Playing / " .. backend.name) or message, not ok)
+        status(ok and ((not windowFocused() and "Playing in background / " or "Playing / ") .. backend.name) or message, not ok)
     end))
 end
 local function stopPlayback()
@@ -1003,10 +1029,30 @@ local function setBackend(mode)
     if not paused then player.playing, player.outputActive = false, false; Keyboard:panic(); warn(pauseError) end
     local available = backend:select(mode)
     inputButton.Text = "Input: " .. mode
-    status(available and ("Input: " .. backend.name .. ". Click Test keys with Roblox focused.")
+    refreshBackgroundButton()
+    status(available and ("Input: " .. backend.name .. (backgroundPlayback and backend:canBackground()
+        and ". Background playback enabled; click Test keys." or ". Click Test keys with Roblox focused."))
         or ("Input mode is unavailable: " .. mode), not available)
     return available
 end
+local function setBackgroundPlayback(enabled)
+    assert(type(enabled) == "boolean", "BackgroundPlayback must be true or false")
+    cancelStart()
+    local paused, pauseError = pcall(function() player:pause() end)
+    if not paused then player.playing, player.outputActive = false, false; Keyboard:panic(); warn(pauseError) end
+    backgroundPlayback = enabled
+    if enabled and not backend:canBackground() and virtualInput then
+        backend:select("VirtualInput")
+        inputButton.Text = "Input: " .. backend.mode
+    end
+    local available = backend:canBackground()
+    refreshBackgroundButton()
+    status(enabled and (available and "Background ON. Playback can continue while Roblox is unfocused."
+        or "Background needs virtual input; the current Input still requires Roblox focus.")
+        or "Background OFF. Playback pauses when Roblox loses focus.", enabled and not available)
+    return not enabled or available
+end
+connect(backgroundButton.Activated, safely(function() setBackgroundPlayback(not backgroundPlayback) end))
 local inputModes = {"Auto"}
 if virtualInput then inputModes[#inputModes + 1] = "VirtualInput" end
 if nativeAvailable then inputModes[#inputModes + 1] = "Executor" end
@@ -1027,13 +1073,15 @@ local function testInput()
     local probe = {running = true, cancelled = false, observed = {}, expected = {}, sent = 0,
         received = 0, processed = 0, backend = backend.name}
     inputProbe = probe
-    status("Test starts in 1.5s: focus Roblox's piano. It will play T, U, O.")
+    status(backgroundPlayback and backend:canBackground()
+        and "Test starts in 1.5s. T, U, O will be sent to Roblox, including in background."
+        or "Test starts in 1.5s: focus Roblox's piano. It will play T, U, O.")
     local keys = {"t", "u", "o"}
     local function current() return alive and inputProbe == probe and probe.running end
     local function playOne(index)
         if not current() then return end
-        if not windowFocused() then
-            cancelStart(); status("Test cancelled: focus Roblox and click Test keys again.", true); return
+        if not maySendInput() then
+            cancelStart(); status("This Input needs Roblox focused; enable Background with virtual input.", true); return
         end
         if UserInputService:GetFocusedTextBox() then
             cancelStart(); status("Test cancelled: close the text box and try again.", true); return
@@ -1140,13 +1188,23 @@ connect(UserInputService.InputChanged, function(input)
 end)
 connect(UserInputService.InputEnded, function(input) if input == dragInput then dragInput = nil end end)
 connect(UserInputService.TextBoxFocused, safely(function()
-    if player.playing or pendingPlay then cancelStart(); player:pause(); status("Paused while typing. Press Play to resume.") end
+    if player.playing or pendingPlay or (inputProbe and inputProbe.running) then
+        cancelStart(); player:pause(); status("Paused while typing in Roblox. Press Play to resume.")
+    end
 end))
-if bool(Config.PauseOnFocusLoss, true) then
-    connect(UserInputService.WindowFocusReleased, safely(function()
-        if player.playing or pendingPlay then cancelStart(); player:pause(); status("Paused because Roblox lost focus.") end
-    end))
-end
+connect(UserInputService.WindowFocused, function() appHasFocus = true end)
+connect(UserInputService.WindowFocusReleased, safely(function()
+    appHasFocus = false
+    if player.playing or pendingPlay or (inputProbe and inputProbe.running) then
+        if backgroundPlayback and backend:canBackground() then
+            status("Background playback enabled / " .. backend.name)
+        else
+            cancelStart(); player:pause()
+            status(backgroundPlayback and "This Input needs focus. Choose virtual input for background playback."
+                or "Paused because Roblox lost focus.")
+        end
+    end
+end))
 if bool(Config.Hotkeys, true) then
     connect(UserInputService.InputBegan, safely(function(input, processed)
         if input.KeyCode == Enum.KeyCode.F4 then stopPlayback(); return end
@@ -1157,7 +1215,7 @@ if bool(Config.Hotkeys, true) then
     end))
 end
 
-local api = { Version = "1.0.2", InputBackend = function() return backend.name end }
+local api = { Version = "1.0.3", InputBackend = function() return backend.name end }
 function api:Destroy()
     if not alive then return end
     cancelStart()
@@ -1175,6 +1233,7 @@ function api:Pause() if alive then cancelStart(); player:pause(); status("Paused
 function api:Stop() if alive then stopPlayback() end end
 function api:SetBackend(mode) assert(alive, "Player was destroyed"); return setBackend(mode) end
 function api:TestInput() assert(alive, "Player was destroyed"); testInput() end
+function api:SetBackgroundPlayback(enabled) assert(alive, "Player was destroyed"); return setBackgroundPlayback(enabled) end
 function api:Seek(seconds) assert(alive and finite(seconds), "Seek expects a finite number"); player:seek(seconds) end
 function api:SetSpeed(speed) assert(alive, "Player was destroyed"); setSpeed(speed) end
 function api:SetTranspose(semitones) assert(alive, "Player was destroyed"); setTranspose(semitones) end
@@ -1201,6 +1260,7 @@ function api:Status()
         speed = player.speed, transpose = player.transpose, skippedNotes = player.skipped, resyncs = player.resyncs,
         source = loadedSource and loadedSource.path or nil, binarySafe = loadedSource and loadedSource.binarySafe or false,
         midiBpm = midiBpm, bpm = midiBpm and midiBpm * player.speed or nil, inputMode = backend.mode,
+        backgroundPlayback = backgroundPlayback, backgroundCapable = backend:canBackground(),
         sentDown = backend.sentDown, sentUp = backend.sentUp,
         inputTest = inputProbe and {running = inputProbe.running, cancelled = inputProbe.cancelled,
             sent = inputProbe.sent, received = inputProbe.received, processed = inputProbe.processed, backend = inputProbe.backend} or nil }
@@ -1225,6 +1285,7 @@ connect(RunService.Heartbeat, safely(function(delta)
     tempoLabel.Text = midiBpm and string.format("Tempo: %.1f BPM", midiBpm * player.speed)
         or player.song and "Timing: SMPTE" or "Tempo: -- BPM"
     testInputButton.Text = inputProbe and inputProbe.running and "Testing..." or "Test keys"
+    refreshBackgroundButton()
     local active = 0
     for _ in pairs(player.voices) do active = active + 1 end
     activityLabel.Text = string.format("%d held  /  %d out of range  /  %s", active, player.skipped, backend.name)
