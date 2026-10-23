@@ -7,7 +7,7 @@ A Roblox Luau MIDI piano player inspired by [Zephkek/MIDIPlusPlus](https://githu
 Paste this into Xeno's script editor and execute it in Roblox:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/Cybersize/MIDIPlusPlus-Luau/main/MIDIPlusPlus.lua?v=1.0.4"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Cybersize/MIDIPlusPlus-Luau/main/MIDIPlusPlus.lua?v=1.0.5"))()
 ```
 
 1. The loader downloads the player from this repository and opens its GUI.
@@ -23,6 +23,11 @@ The included `demo.mid` is the same original short melody as the built-in demo. 
 If you prefer a self-contained file, copy the entire contents of `MIDIPlusPlus-standalone.lua` into the executor instead. It contains the same player and does not download code. `Loader.lua` contains the short GitHub startup command; library files are dependencies and are not run directly.
 
 ## Queue songs and refresh the list
+
+Version 1.0.5 displays only song names in the file list, queue, and playing title.
+For example, `MIDIPlusPlus\Queen - Bohemian Rhapsody.mid` appears as
+**Queen - Bohemian Rhapsody**. MIDI extensions and `.b64` sidecar suffixes are
+hidden from names; selecting or queueing an entry still uses its full file path.
 
 Version 1.0.4 adds an **UP NEXT** queue. Click **Files** or **Refresh**, then **+ Queue** beside each song in the order you want. The menu stays open so you can add several songs. The **+ Queue** beside the source field also adds a typed File, URL, or Base64 source. **Queue all** rescans the folder and adds its songs in filename order, hiding duplicate `.b64` sidecars.
 

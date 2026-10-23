@@ -182,7 +182,7 @@ end
 
 -- The build helper inserts the exact deliverable below, inside runScript().
 local function runScript()
--- MIDI++ Luau 1.0.4
+-- MIDI++ Luau 1.0.5
 -- SPDX-License-Identifier: GPL-3.0-only
 -- Piano layouts and velocity curves adapted from Zephkek/MIDIPlusPlus.
 -- https://github.com/Zephkek/MIDIPlusPlus
@@ -930,7 +930,7 @@ end
 
 local header = make("Frame", {Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1, Active = true}, window)
 label(header, "MIDI++", 22, 10, 140, 25, 23, colors.accent).Font = Enum.Font.GothamBold
-label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.4", 23, 37, 360, 16, 10, colors.muted)
+label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.5", 23, 37, 360, 16, 10, colors.muted)
 local backgroundButton = button(header, "", 365, 16, 174, 30)
 local function refreshBackgroundButton()
     backgroundButton.Text = backgroundPlayback and (backend:canBackground() and "Background: ON" or "Background: N/A")
@@ -1090,7 +1090,9 @@ local function sourceName(value, mode)
     if mode == "Raw" then return "Demo - MIDI++ Luau" end
     if mode == "Base64" then return "Base64 MIDI" end
     local path = mode == "URL" and (value:match("^[^?]+") or value) or value
-    return (path:match("([^/\\]+)$") or "MIDI"):sub(1, 120)
+    local name = path:match("([^/\\]+)$") or "MIDI"
+    name = name:gsub("%.[bB]64$", ""):gsub("%.[mM][iI][dD][iI]?$", ""):gsub("%.[rR][mM][iI]$", "")
+    return (name ~= "" and name or "MIDI"):sub(1, 120)
 end
 local function queueCount() return #queue + (queuedLoading and 1 or 0) end
 refreshQueue = function()
@@ -1255,7 +1257,7 @@ local function refreshFiles()
         empty.ZIndex = 21
     end
     for i, path in ipairs(filtered) do
-        local b = button(fileList, path, 4, (i - 1) * 30, 490, 28)
+        local b = button(fileList, sourceName(path, "File"), 4, (i - 1) * 30, 490, 28)
         b.ZIndex, b.TextTruncate = 21, Enum.TextTruncate.AtEnd
         local add = button(fileList, "+ Queue", 502, (i - 1) * 30, 76, 28)
         add.ZIndex = 21
@@ -1556,7 +1558,7 @@ if bool(Config.Hotkeys, true) then
     end))
 end
 
-local api = { Version = "1.0.4", InputBackend = function() return backend.name end }
+local api = { Version = "1.0.5", InputBackend = function() return backend.name end }
 function api:Destroy()
     if not alive then return end
     cancelStart()
@@ -1764,9 +1766,9 @@ test("file, URL, base64 and invalid file paths", function()
 end)
 test("file menu filters and selects MIDI files", function()
     findText("Files").Activated:Fire()
-    assert(findButton("MIDIPlusPlus/song.mid") and not findButton("MIDIPlusPlus/no.txt"))
-    findButton("MIDIPlusPlus/song.mid").Activated:Fire()
-    assert(not findButton("MIDIPlusPlus/song.mid"), "file menu must close after selection")
+    assert(findButton("song") and not findButton("no.txt"))
+    findButton("song").Activated:Fire()
+    assert(not findButton("song"), "file menu must close after selection")
 end)
 test("truncated binary file loads from its ASCII sidecar", function()
     local original = fileData
@@ -1788,10 +1790,10 @@ test("file menu lists base64-only files and hides duplicate sidecars", function(
     local previousListing = fileListing
     fileListing = {"MIDIPlusPlus/song.mid.b64", "MIDIPlusPlus/song.mid", "MIDIPlusPlus/only.mid.b64"}
     findText("Files").Activated:Fire()
-    assert(findButton("MIDIPlusPlus/song.mid") and not findButton("MIDIPlusPlus/song.mid.b64"))
-    assert(findButton("MIDIPlusPlus/only.mid.b64"))
+    assert(findButton("song") and not findButton("MIDIPlusPlus/song.mid"))
+    assert(findButton("only") and not findButton("only.mid.b64"))
     api:LoadFile("MIDIPlusPlus/song.mid")
-    assert(not findButton("MIDIPlusPlus/song.mid"), "loading must close the menu")
+    assert(not findButton("song"), "loading must close the menu")
     fileListing = previousListing
 end)
 test("reinjection replaces the old UI and connections", function()
@@ -1976,7 +1978,7 @@ test("queue starts without a manually loaded song and advances in order", functi
     api:EnqueueBase64("TVRoZAAAAAYAAAABAeBNVHJrAAAAsQD/AxBNSURJKysgTHVhdSBEZW1vAP9RAwehIACQPFqCaIA8AHj/AQAAkEBagmiAQAB4/wEAAJBDWoJogEMAeP8BAACQSFqCaIBIAHj/AQAAkENagmiAQwB4/wEAAJBAWoJogEAAeP8BAACQPlqCaIA+AHj/AQAAkEFagmiAQQB4/wEAALBAfwCQPGQAkEBkAJBDZACQSGSDYIA8AACAQAAAgEMAAIBIAINgsEAAAP8vAA==")
     assert(api:Status().queueCount == 3)
     api:Play(); flushTimers(); RunService.Heartbeat:Fire(0.1)
-    assert(api:Status().playing and api:Status().queueCount == 2 and api:Status().song == "song.mid")
+    assert(api:Status().playing and api:Status().queueCount == 2 and api:Status().song == "song")
     finishSong(); assert(api:Status().pending and api:Status().queueCount == 1)
     flushTimers(); assert(api:Status().playing and api:GetQueue()[1].mode == "Base64")
     finishSong(); flushTimers()
@@ -1999,20 +2001,21 @@ test("Refresh discovers a newly copied Queen file with spaces while playing", fu
     newQueuePlayer(); findButton("Load demo").Activated:Fire()
     local oldListing = fileListing
     findButton("Refresh").Activated:Fire()
-    local queen = "MIDIPlusPlus/Queen - Bohemian Rhapsody.mid"
-    assert(not findButton(queen))
+    local queen = "MIDIPlusPlus\\Queen - Bohemian Rhapsody.mid"
+    local queenName = "Queen - Bohemian Rhapsody"
+    assert(not findButton(queenName))
     api:Play(); flushTimers(); RunService.Heartbeat:Fire(0.1)
     local before = api:Status().position
     fileListing = {queen .. ".b64", queen, "MIDIPlusPlus/no.txt"}
     fileOverrides[queen .. ".b64"] = "TVRoZAAAAAYAAAABAeBNVHJrAAAAsQD/AxBNSURJKysgTHVhdSBEZW1vAP9RAwehIACQPFqCaIA8AHj/AQAAkEBagmiAQAB4/wEAAJBDWoJogEMAeP8BAACQSFqCaIBIAHj/AQAAkENagmiAQwB4/wEAAJBAWoJogEAAeP8BAACQPlqCaIA+AHj/AQAAkEFagmiAQQB4/wEAALBAfwCQPGQAkEBkAJBDZACQSGSDYIA8AACAQAAAgEMAAIBIAINgsEAAAP8vAA=="
     findButton("Refresh").Activated:Fire()
-    assert(findButton(queen) and not findButton(queen .. ".b64"))
+    assert(findButton(queenName) and not findButton(queen))
     assert(api:Status().playing and api:Status().position == before and count(physicallyDown) == 1)
-    local menu = findButton(queen).Parent
+    local menu = findButton(queenName).Parent
     findButton("+ Queue", menu).Activated:Fire()
-    assert(api:GetQueue()[1].name == "Queen - Bohemian Rhapsody.mid" and findButton(queen))
-    findButton(queen).Activated:Fire(); findButton("Load").Activated:Fire()
-    assert(api:Status().song == "Queen - Bohemian Rhapsody.mid" and api:Status().binarySafe)
+    assert(api:GetQueue()[1].name == queenName and findButton(queenName))
+    findButton(queenName).Activated:Fire(); findButton("Load").Activated:Fire()
+    assert(api:Status().song == queenName and api:Status().binarySafe)
     fileListing, fileOverrides[queen .. ".b64"] = oldListing, nil
 end)
 
@@ -2022,9 +2025,9 @@ test("Queue all sorts the refreshed file list and hides duplicate sidecars", fun
     fileListing = {"MIDIPlusPlus/z.mid.b64", "MIDIPlusPlus/a.MID.b64", "./MIDIPlusPlus/a.MID", "MIDIPlusPlus/no.txt"}
     findButton("Queue all").Activated:Fire()
     local items = api:GetQueue()
-    assert(#items == 2 and items[1].name == "a.MID" and items[2].name == "z.mid.b64")
+    assert(#items == 2 and items[1].name == "a" and items[2].name == "z")
     findButton("Remove").Activated:Fire()
-    assert(api:Status().queueCount == 1 and api:GetQueue()[1].name == "z.mid.b64")
+    assert(api:Status().queueCount == 1 and api:GetQueue()[1].name == "z")
     findButton("Clear queue").Activated:Fire(); assert(api:Status().queueCount == 0)
     fileListing = oldListing
 end)
@@ -2037,7 +2040,7 @@ test("queue rejects empty sources and enforces its bound without stopping playba
     local id, err = api:EnqueueFile("MIDIPlusPlus/song.mid")
     assert(not id and err:find("128", 1, true) and api:Status().playing and api:Status().queueCount == 128)
     local snapshot = api:GetQueue(); snapshot[1].name = "changed"; table.clear(snapshot)
-    assert(#api:GetQueue() == 128 and api:GetQueue()[1].name == "song.mid")
+    assert(#api:GetQueue() == 128 and api:GetQueue()[1].name == "song")
     api:ClearQueue(); assert(api:Status().playing and count(physicallyDown) == 1)
     api:Stop()
 end)
@@ -2049,7 +2052,7 @@ test("queue skips missing or malformed songs and starts the next valid song", fu
     api:EnqueueFile("MIDIPlusPlus/song.mid")
     local beforeWarnings = #warningLog
     api:Next(); flushTimers(); RunService.Heartbeat:Fire(0.1)
-    assert(api:Status().playing and api:Status().queueCount == 0 and api:Status().song == "song.mid")
+    assert(api:Status().playing and api:Status().queueCount == 0 and api:Status().song == "song")
     assert(#warningLog == beforeWarnings + 2)
     api:Stop(); api:EnqueueFile("missing.mid"); api:Next(); flushTimers()
     assert(not api:Status().loading and not api:Status().pending and not api:Status().playing)
@@ -2063,7 +2066,7 @@ test("Loop holds the current song and Next overrides it", function()
     api:Play(); flushTimers(); finishSong()
     assert(api:Status().playing and api:Status().queueCount == 1 and api:Status().position == 0)
     findButton("Next").Activated:Fire(); flushTimers()
-    assert(api:Status().playing and api:Status().song == "song.mid" and api:Status().queueCount == 0)
+    assert(api:Status().playing and api:Status().song == "song" and api:Status().queueCount == 0)
     assert(findText("UP NEXT  (0)  /  Loop repeats current song"))
     findButton("[ON]   Loop").Activated:Fire()
     assert(findText("UP NEXT  (0)  /  Plays in order"))

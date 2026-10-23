@@ -313,7 +313,7 @@ end
 
 local header = make("Frame", {Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1, Active = true}, window)
 label(header, "MIDI++", 22, 10, 140, 25, 23, colors.accent).Font = Enum.Font.GothamBold
-label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.4", 23, 37, 360, 16, 10, colors.muted)
+label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.5", 23, 37, 360, 16, 10, colors.muted)
 local backgroundButton = button(header, "", 365, 16, 174, 30)
 local function refreshBackgroundButton()
     backgroundButton.Text = backgroundPlayback and (backend:canBackground() and "Background: ON" or "Background: N/A")
@@ -473,7 +473,9 @@ local function sourceName(value, mode)
     if mode == "Raw" then return "Demo - MIDI++ Luau" end
     if mode == "Base64" then return "Base64 MIDI" end
     local path = mode == "URL" and (value:match("^[^?]+") or value) or value
-    return (path:match("([^/\\]+)$") or "MIDI"):sub(1, 120)
+    local name = path:match("([^/\\]+)$") or "MIDI"
+    name = name:gsub("%.[bB]64$", ""):gsub("%.[mM][iI][dD][iI]?$", ""):gsub("%.[rR][mM][iI]$", "")
+    return (name ~= "" and name or "MIDI"):sub(1, 120)
 end
 local function queueCount() return #queue + (queuedLoading and 1 or 0) end
 refreshQueue = function()
@@ -638,7 +640,7 @@ local function refreshFiles()
         empty.ZIndex = 21
     end
     for i, path in ipairs(filtered) do
-        local b = button(fileList, path, 4, (i - 1) * 30, 490, 28)
+        local b = button(fileList, sourceName(path, "File"), 4, (i - 1) * 30, 490, 28)
         b.ZIndex, b.TextTruncate = 21, Enum.TextTruncate.AtEnd
         local add = button(fileList, "+ Queue", 502, (i - 1) * 30, 76, 28)
         add.ZIndex = 21
@@ -939,7 +941,7 @@ if bool(Config.Hotkeys, true) then
     end))
 end
 
-local api = { Version = "1.0.4", InputBackend = function() return backend.name end }
+local api = { Version = "1.0.5", InputBackend = function() return backend.name end }
 function api:Destroy()
     if not alive then return end
     cancelStart()
