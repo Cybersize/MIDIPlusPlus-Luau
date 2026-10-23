@@ -7,7 +7,7 @@ A Roblox Luau MIDI piano player inspired by [Zephkek/MIDIPlusPlus](https://githu
 Paste this into Xeno's script editor and execute it in Roblox:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/Cybersize/MIDIPlusPlus-Luau/main/MIDIPlusPlus.lua?v=1.0.5"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Cybersize/MIDIPlusPlus-Luau/main/MIDIPlusPlus.lua?v=1.0.6"))()
 ```
 
 1. The loader downloads the player from this repository and opens its GUI.
@@ -38,6 +38,32 @@ Press **Play** to begin. If a song is already loaded, it plays first; **Next** s
 **Refresh** scans only the configured executor folder, not your Downloads folder. If a file such as `Queen - Bohemian Rhapsody.mid` is missing, copy it into `workspace/MIDIPlusPlus`, run `Convert-MIDI.cmd` for Xeno, and click **Refresh**. Spaces and hyphens in filenames are supported. Files ending in `.mid`, `.midi`, `.rmi`, and their `.b64` sidecars are listed directly inside that folder; subfolders are not scanned recursively.
 
 ## Fix for incomplete binary reads in Xeno
+
+### Thai and other Unicode filenames
+
+Version 1.0.6 preserves Thai names such as **ดาวนำทาง** in Files, the queue,
+the playing title and UTF-8 MIDI track names. Display limits count complete
+Unicode characters instead of cutting a multibyte character in half.
+
+If Xeno cannot open or list a Thai-named file, run **Convert-MIDI.cmd**, then
+click **Refresh**. Alongside normal `.b64` sidecars, the converter creates
+`MIDIPlusPlus-files.txt` and a `.midipp-cache` folder. These contain an ASCII
+filename index and ASCII-named MIDI copies. The player displays the original
+Thai title while loading its compatibility copy. This also works when native
+`listfiles` fails, and supports a `.mid.b64` file without its original `.mid`.
+Original filenames and original MIDI bytes are preserved. Run the converter
+again after adding or changing songs; the player never renames your files.
+
+MIDI Studio 1.2.2 automatically updates the same index when **Save to Xeno piano
+folder** is used. The index contains only filenames and generated cache IDs;
+it does not contain or execute Lua. Paths in the index are restricted to a
+basename and a generated cache filename.
+
+This works around filename encoding limitations visible in a
+[published Xeno filesystem implementation](https://github.com/tyronetheqt/Xeno/blob/main/Xeno/src/server.cpp),
+which uses narrow Windows paths. It does not change the executor itself.
+
+### Binary-safe MIDI bytes
 
 Version 1.0.1 supports binary-safe `.mid.b64` files. A text-mode file bridge can truncate a MIDI at byte `0x1A` (Ctrl+Z), causing an error about a track length exceeding the remaining file bytes. The original MIDI file can still be valid. One [published Xeno source version](https://github.com/tyronetheqt/Xeno/blob/main/Xeno/src/server.cpp#L72) opens files as a text stream.
 

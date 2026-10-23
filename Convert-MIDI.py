@@ -31,6 +31,10 @@ def convert_file(path):
 
 
 def main():
+    from midi_index import build_index
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("paths", nargs="*", help="MIDI files or folders")
     arguments = parser.parse_args()
@@ -40,11 +44,13 @@ def main():
         if not local_app_data:
             parser.error("pass a MIDI file or folder")
         inputs = [Path(local_app_data) / "Xeno" / "workspace" / "MIDIPlusPlus"]
-    files, errors, changed, seen = [], 0, 0, set()
+    files, errors, changed, seen, folders = [], 0, 0, set(), set()
     for value in inputs:
         if value.is_dir():
+            folders.add(value.resolve())
             files.extend(path for path in value.iterdir() if path.is_file() and path.suffix.lower() in EXTENSIONS)
         elif value.is_file() and value.suffix.lower() in EXTENSIONS:
+            folders.add(value.resolve().parent)
             files.append(value)
         else:
             print(f"Not a MIDI file or folder: {value}", file=sys.stderr)
@@ -61,8 +67,20 @@ def main():
         except (OSError, ValueError) as error:
             print(f"Skipped {path.name}: {error}", file=sys.stderr)
             errors += 1
+    indexed = 0
+    for folder in sorted(folders):
+        try:
+            result = build_index(folder)
+            indexed += result["indexed"]
+            print(f"Filename compatibility index: {result['indexed']} songs in {folder}")
+            for skipped in result["skipped"]:
+                print(f"Index skipped {skipped['name']}: {skipped['error']}", file=sys.stderr)
+                errors += 1
+        except (OSError, ValueError) as error:
+            print(f"Could not prepare filename compatibility for {folder}: {error}", file=sys.stderr)
+            errors += 1
     print(f"{changed} sidecars created/updated; {len(seen)} MIDI files checked; {errors} errors.")
-    return 1 if errors or not seen else 0
+    return 1 if errors or not (seen or indexed) else 0
 
 
 if __name__ == "__main__":

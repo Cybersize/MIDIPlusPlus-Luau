@@ -1,4 +1,4 @@
--- MIDI++ Luau 1.0.5
+-- MIDI++ Luau 1.0.6
 -- SPDX-License-Identifier: GPL-3.0-only
 -- Piano layouts and velocity curves adapted from Zephkek/MIDIPlusPlus.
 -- https://github.com/Zephkek/MIDIPlusPlus
@@ -15,6 +15,27 @@ local Core = {}
 
 local function check(condition, message)
     if not condition then error("MIDI: " .. message, 0) end
+end
+
+-- Text limits count complete UTF-8 codepoints, not bytes. Invalid MIDI metadata
+-- is replaced locally without destroying valid Thai (or other Unicode) text.
+function Core.displayText(value, limit)
+    local result, position = {}, 1
+    while position <= #value and #result < limit do
+        local first = value:byte(position)
+        local size = first >= 194 and first <= 223 and 2
+            or first >= 224 and first <= 239 and 3
+            or first >= 240 and first <= 244 and 4 or 1
+        local character = value:sub(position, position + size - 1)
+        if first >= 32 and first ~= 127 and #character == size and utf8.len(character) == 1 then
+            result[#result + 1] = character
+            position = position + size
+        else
+            result[#result + 1] = "?"
+            position = position + 1
+        end
+    end
+    return table.concat(result)
 end
 
 function Core.parse(data, limits)
@@ -123,7 +144,7 @@ function Core.parse(data, limits)
                     check(tempo > 0, "tempo cannot be zero")
                     push({ kind = "tempo", tick = tick, tempo = tempo, track = trackIndex })
                 elseif kind == 3 then
-                    track.name = payload:gsub("[%z\1-\31\127-\255]", "?"):sub(1, 80)
+                    track.name = Core.displayText(payload, 80)
                 elseif kind == 47 then
                     check(length == 0, "invalid end-of-track event")
                     break
@@ -206,6 +227,31 @@ end
 -- Some executor bridges read files in Windows text mode, which can truncate
 -- binary MIDI at 0x1A. A .mid.b64 sidecar carries the original bytes as ASCII.
 -- Reader injection keeps this path testable without executor-specific globals.
+function Core.readFileIndex(text, folder)
+    check(type(text) == "string" and #text <= 4 * 1024 * 1024, "file index is too large")
+    local result, header = {}, false
+    folder = folder:gsub("[/\\]+$", "")
+    for line in text:gmatch("[^\r\n]+") do
+        if not header then
+            check(line == "MIDIPlusPlus files v1", "unknown file index format")
+            header = true
+        else
+            check(#result < 4096 and #line <= 2048, "file index limit exceeded")
+            local encoded, alias = line:match("^([A-Za-z0-9+/=]+)\t([0-9a-f]+)$")
+            check(encoded and alias and #alias == 64, "invalid file index entry")
+            local name = Core.decodeBase64(encoded)
+            local base = name:lower():gsub("%.b64$", "")
+            check(#name <= 1024 and utf8.len(name) ~= nil and not name:find("/", 1, true)
+                and not name:find("\\", 1, true) and not name:find("[%z\1-\31]"), "invalid indexed filename")
+            check(base:match("%.midi?$") or base:match("%.rmi$"), "indexed file is not MIDI")
+            result[#result + 1] = {path = folder .. "/" .. name,
+                readPath = folder .. "/.midipp-cache/" .. alias .. ".mid.b64"}
+        end
+    end
+    check(header, "empty file index")
+    return result
+end
+
 function Core.loadFile(path, reader, limits)
     check(type(path) == "string" and #path > 0, "enter a MIDI path")
     check(type(reader) == "function", "this executor has no readfile; use URL, Base64, or Demo")
@@ -746,7 +792,7 @@ end
 
 local header = make("Frame", {Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1, Active = true}, window)
 label(header, "MIDI++", 22, 10, 140, 25, 23, colors.accent).Font = Enum.Font.GothamBold
-label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.5", 23, 37, 360, 16, 10, colors.muted)
+label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.6", 23, 37, 360, 16, 10, colors.muted)
 local backgroundButton = button(header, "", 365, 16, 174, 30)
 local function refreshBackgroundButton()
     backgroundButton.Text = backgroundPlayback and (backend:canBackground() and "Background: ON" or "Background: N/A")
@@ -839,7 +885,7 @@ label(body, "F6 play/pause  /  F7 stop  /  F8 show/hide  /  F4 panic", 22, 692, 
 
 local function status(message, failed)
     if not alive then return end
-    statusLabel.Text = tostring(message):gsub("[\r\n]", " "):sub(1, 240)
+    statusLabel.Text = Core.displayText(tostring(message):gsub("[\r\n]", " "), 240)
     statusLabel.TextColor3 = failed and colors.danger or colors.accent
 end
 local cancelLoading, advanceQueue, startOrPause
@@ -908,7 +954,22 @@ local function sourceName(value, mode)
     local path = mode == "URL" and (value:match("^[^?]+") or value) or value
     local name = path:match("([^/\\]+)$") or "MIDI"
     name = name:gsub("%.[bB]64$", ""):gsub("%.[mM][iI][dD][iI]?$", ""):gsub("%.[rR][mM][iI]$", "")
-    return (name ~= "" and name or "MIDI"):sub(1, 120)
+    return Core.displayText(name ~= "" and name or "MIDI", 120)
+end
+local fileAliases = {}
+local function fileIdentity(path)
+    return path:gsub("\\", "/"):gsub("^%./", ""):lower():gsub("%.b64$", "")
+end
+local function readFileIndex()
+    local folder = Config.Folder or "MIDIPlusPlus"
+    table.clear(fileAliases)
+    if type(readfile) ~= "function" then return {} end
+    local ok, text = pcall(readfile, folder .. "/MIDIPlusPlus-files.txt")
+    if not ok then return {} end
+    local parsed, entries = pcall(Core.readFileIndex, text, folder)
+    if not parsed then return {} end
+    for _, entry in ipairs(entries) do fileAliases[fileIdentity(entry.path)] = entry.readPath end
+    return entries
 end
 local function queueCount() return #queue + (queuedLoading and 1 or 0) end
 refreshQueue = function()
@@ -1011,7 +1072,21 @@ local function installSong(song, name, sourceInfo)
 end
 local function readSource(value, mode)
     local data
-    if mode == "File" then return Core.loadFile(value, readfile)
+    if mode == "File" then
+        readFileIndex()
+        local alias = fileAliases[fileIdentity(value)]
+        local selected = value:find("[\128-\255]") and alias or value
+        local ok, song, info = pcall(Core.loadFile, selected, readfile)
+        local fallback = selected == alias and value or alias
+        if not ok and fallback and fallback ~= selected then ok, song, info = pcall(Core.loadFile, fallback, readfile) end
+        if not ok then
+            if value:find("[\128-\255]") and not alias then
+                error("Could not open this Unicode filename. Run Convert-MIDI.cmd, then Refresh and load it again. " .. tostring(song))
+            end
+            error(song)
+        end
+        if selected == alias or info.path == alias then info.originalPath = value end
+        return song, info
     elseif mode == "Raw" then data = value
     elseif mode == "URL" then data = fetchMidi(value)
     elseif mode == "Base64" then
@@ -1044,17 +1119,29 @@ connect(demoButton.Activated, safely(function() loadSource(Core.decodeBase64(DEM
 connect(enqueueButton.Activated, function() enqueueSource(trim(sourceBox.Text), sourceMode) end)
 
 local function scanFiles()
-    assert(type(listfiles) == "function", "This executor has no listfiles; type the relative file path instead")
     local folder = Config.Folder or "MIDIPlusPlus"
     if type(makefolder) == "function" then pcall(makefolder, folder) end
-    local files, filtered, choices = listfiles(folder), {}, {}
+    local indexed = readFileIndex()
+    local ok, files = pcall(function()
+        assert(type(listfiles) == "function", "This executor has no listfiles")
+        return listfiles(folder)
+    end)
+    assert(ok and type(files) == "table" or #indexed > 0,
+        "Could not list files. Run Convert-MIDI.cmd for this folder, then Refresh. " .. tostring(files))
+    if not ok or type(files) ~= "table" then files = {} end
+    local filtered, choices = {}, {}
     for _, file in ipairs(files) do
         local lower = tostring(file):lower()
         local base = lower:gsub("%.b64$", "")
-        if base:match("%.midi?$") or base:match("%.rmi$") then
+        if type(file) == "string" and utf8.len(file) ~= nil and not file:find("?", 1, true)
+            and (base:match("%.midi?$") or base:match("%.rmi$")) then
             local canonical = base:gsub("\\", "/"):gsub("^%./", "")
             if not choices[canonical] or not lower:match("%.b64$") then choices[canonical] = file end
         end
+    end
+    for _, entry in ipairs(indexed) do
+        local identity = fileIdentity(entry.path)
+        if not choices[identity] then choices[identity] = entry.path end
     end
     for _, file in pairs(choices) do filtered[#filtered + 1] = file end
     table.sort(filtered, function(a, b) return a:lower() < b:lower() end)
@@ -1374,7 +1461,7 @@ if bool(Config.Hotkeys, true) then
     end))
 end
 
-local api = { Version = "1.0.5", InputBackend = function() return backend.name end }
+local api = { Version = "1.0.6", InputBackend = function() return backend.name end }
 function api:Destroy()
     if not alive then return end
     cancelStart()

@@ -5,14 +5,44 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import os
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from midi_index import build_index
 spec = importlib.util.spec_from_file_location("midi_converter", ROOT / "Convert-MIDI.py")
 converter = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(converter)
 
 
 class ConverterTests(unittest.TestCase):
+    def test_thai_filenames_have_ascii_cache_paths_and_keep_exact_bytes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "ดาวนำทาง - ไม่รักดีกว่า.mid"
+            original = b"MThd\0\x1a\xff"
+            path.write_bytes(original)
+            result = build_index(folder)
+            self.assertEqual(result["indexed"], 1)
+            lines = Path(result["index"]).read_bytes().splitlines()
+            self.assertTrue(Path(result["index"]).read_bytes().isascii())
+            encoded_name, key = lines[1].split(b"\t")
+            self.assertEqual(base64.b64decode(encoded_name).decode("utf-8"), path.name)
+            alias = Path(folder) / ".midipp-cache" / (key.decode() + ".mid.b64")
+            self.assertEqual(base64.b64decode(alias.read_bytes()), original)
+            self.assertEqual(path.read_bytes(), original)
+            before = alias.stat().st_mtime_ns
+            build_index(folder)
+            self.assertEqual(alias.stat().st_mtime_ns, before)
+
+    def test_sidecar_only_thai_file_and_ascii_console_cli_work(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "ดาวนำทาง.mid.b64"
+            original = b"MThd\0\x1a\xff"
+            path.write_bytes(base64.b64encode(original))
+            result = subprocess.run([sys.executable, str(ROOT / "Convert-MIDI.py"), folder],
+                                    capture_output=True, env=dict(os.environ, PYTHONIOENCODING="ascii"))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(build_index(folder)["names"], [path.name])
     def test_all_byte_values_roundtrip_and_original_stays_unchanged(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "binary.mid"

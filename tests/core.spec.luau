@@ -258,4 +258,18 @@ test("stable simultaneous ordering and multi-track channels", function()
     assert(count(p.voices) == 1)
     for _, voice in pairs(p.voices) do assert(voice.track == 1) end
 end)
+test("Thai track names survive parsing and UTF-8 text limits never split a character", function()
+    local name = "เสียงร้อง - ดาวนำทาง"
+    local song = Core.parse(midi({event(0, 255, 3, #name) .. name .. event(0, 144, 60, 90) .. event(480, 128, 60, 0) .. eot}))
+    assert(song.tracks[1].name == name)
+    local limited = Core.displayText("A" .. string.rep("ก", 100), 80)
+    assert(utf8.len(limited) == 80 and limited == "A" .. string.rep("ก", 79))
+    assert(Core.displayText("ok" .. string.char(255, 0) .. "ก", 80) == "ok??ก")
+end)
+
+test("filename index cannot redirect loading outside the generated cache", function()
+    local header = "MIDIPlusPlus files v1\n"
+    assert(not pcall(Core.readFileIndex, header .. "Li4vb3V0c2lkZS5taWQ=\t" .. string.rep("a", 64) .. "\n", "MIDIPlusPlus"))
+    assert(not pcall(Core.readFileIndex, header .. "c29uZy5taWQ=\t../outside\n", "MIDIPlusPlus"))
+end)
 print(string.format("%d core tests passed", passed))
