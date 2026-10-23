@@ -2,18 +2,18 @@
 
 A Roblox Luau MIDI piano player inspired by [Zephkek/MIDIPlusPlus](https://github.com/Zephkek/MIDIPlusPlus). It uses virtual keyboard input, so it does not need a particular game's remotes or internal scripts. Hosted at [Cybersize/MIDIPlusPlus-Luau](https://github.com/Cybersize/MIDIPlusPlus-Luau).
 
-## Run in Xeno
+## Run in Project Real
 
-Paste this into Xeno's script editor and execute it in Roblox:
+Paste this into Project Real's script editor and execute it in Roblox:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/Cybersize/MIDIPlusPlus-Luau/main/MIDIPlusPlus.lua?v=1.0.6"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Cybersize/MIDIPlusPlus-Luau/main/MIDIPlusPlus.lua?v=1.0.7"))()
 ```
 
 1. The loader downloads the player from this repository and opens its GUI.
 2. Open or sit at the piano in your game. Enable that game's computer-keyboard piano controls if needed.
 3. Click **Load demo**, then **Play**. Playback starts after 1.5 seconds. If you hear the demo, the input backend and piano layout work together.
-4. Put your own MIDI file in the executor's workspace, for example `workspace/MIDIPlusPlus/song.mid`. For Xeno, run the included `Convert-MIDI.cmd` once to create text-safe copies beside your MIDI files (requires Python 3). Use the executor's actual workspace folder; its location varies by installation.
+4. Put your MIDI files in Project Real's `workspace/MIDIPlusPlus` folder. The usual Windows location is `%LOCALAPPDATA%\Real\workspace\MIDIPlusPlus`; use your installation's actual workspace. Standard `.mid` files can load directly through Real's binary `readfile` API. If Thai filenames fail, run the included `Convert-MIDI.cmd` once (Python 3), then click **Refresh**.
 5. Enter `MIDIPlusPlus/song.mid` in the player's **File** field, click **Load**, and click **Play**.
 
 You can also select **URL** and paste a direct link to a binary `.mid` file, or select **Base64** and paste encoded MIDI bytes. A GitHub file-view URL or a YouTube URL is not a MIDI download. **Files** lists MIDI files inside the `MIDIPlusPlus` workspace folder when `listfiles` is available. **Refresh** rescans the folder and opens the updated list while the current song keeps playing.
@@ -35,17 +35,17 @@ Press **Play** to begin. If a song is already loaded, it plays first; **Next** s
 
 **Pause**, **Stop**, typing in a Roblox text box, and applicable focus checks cancel pending starts. If a queued song is still downloading, Pause/Stop cancels its pending playback and returns the entry to the front of the queue. Late download results cannot restart the player. **Loop ON** repeats the current song; turn it off for automatic queue progression or use **Next** to skip. Loading another song manually keeps pending queue entries. Closing or rerunning the player clears the queue.
 
-**Refresh** scans only the configured executor folder, not your Downloads folder. If a file such as `Queen - Bohemian Rhapsody.mid` is missing, copy it into `workspace/MIDIPlusPlus`, run `Convert-MIDI.cmd` for Xeno, and click **Refresh**. Spaces and hyphens in filenames are supported. Files ending in `.mid`, `.midi`, `.rmi`, and their `.b64` sidecars are listed directly inside that folder; subfolders are not scanned recursively.
+**Refresh** scans only the configured executor folder, not your Downloads folder. If a file such as `Queen - Bohemian Rhapsody.mid` is missing, copy it into your current executor's `workspace/MIDIPlusPlus` and click **Refresh**. Spaces and hyphens in filenames are supported. Files ending in `.mid`, `.midi`, `.rmi`, and their `.b64` sidecars are listed directly inside that folder; subfolders are not scanned recursively.
 
-## Fix for incomplete binary reads in Xeno
+## Filename and binary compatibility
 
 ### Thai and other Unicode filenames
 
-Version 1.0.6 preserves Thai names such as **ดาวนำทาง** in Files, the queue,
+Version 1.0.6 added Thai names such as **ดาวนำทาง** in Files, the queue,
 the playing title and UTF-8 MIDI track names. Display limits count complete
 Unicode characters instead of cutting a multibyte character in half.
 
-If Xeno cannot open or list a Thai-named file, run **Convert-MIDI.cmd**, then
+If your executor cannot open or list a Thai-named file, run **Convert-MIDI.cmd**, then
 click **Refresh**. Alongside normal `.b64` sidecars, the converter creates
 `MIDIPlusPlus-files.txt` and a `.midipp-cache` folder. These contain an ASCII
 filename index and ASCII-named MIDI copies. The player displays the original
@@ -54,12 +54,16 @@ Thai title while loading its compatibility copy. This also works when native
 Original filenames and original MIDI bytes are preserved. Run the converter
 again after adding or changing songs; the player never renames your files.
 
-MIDI Studio 1.2.2 automatically updates the same index when **Save to Xeno piano
-folder** is used. The index contains only filenames and generated cache IDs;
+Version 1.0.7 detects Project Real's usual workspace first, with Xeno as a fallback.
+Pass a folder explicitly for another installation, or use `--executor xeno` to
+choose Xeno when both are installed. MIDI Studio 1.2.3 uses the same detection;
+**Save to Project Real piano folder** updates the index automatically.
+The index contains only filenames and generated cache IDs;
 it does not contain or execute Lua. Paths in the index are restricted to a
 basename and a generated cache filename.
 
-This works around filename encoding limitations visible in a
+The ASCII aliases avoid relying on native Unicode path handling. This includes
+filename encoding limitations visible in a
 [published Xeno filesystem implementation](https://github.com/tyronetheqt/Xeno/blob/main/Xeno/src/server.cpp),
 which uses narrow Windows paths. It does not change the executor itself.
 
@@ -73,7 +77,7 @@ Run `Convert-MIDI.cmd`, or use:
 python Convert-MIDI.py "C:\path\to\workspace\MIDIPlusPlus"
 ```
 
-With no path, the converter uses `%LOCALAPPDATA%\Xeno\workspace\MIDIPlusPlus`. It writes ASCII base64 files such as `song.mid.b64` beside the original files. It leaves the `.mid` files untouched and performs no network requests. Run it again after adding or changing songs.
+With no path, the converter prefers `%LOCALAPPDATA%\Real\workspace\MIDIPlusPlus` if Real's workspace exists, then `%LOCALAPPDATA%\Xeno\workspace\MIDIPlusPlus`. `python Convert-MIDI.py --executor real` selects Real explicitly. It writes ASCII base64 files such as `song.mid.b64` beside the original files. It leaves the `.mid` files untouched and performs no network requests. Run it again after adding or changing songs.
 
 Continue choosing `song.mid` in the player: a matching `.mid.b64` file is preferred automatically. You can also load a `.mid.b64` file directly. The status line confirms when the text-safe file was used, and the file menu hides duplicate sidecars. Both paths use the same MIDI parser and preserve all original note bytes; incomplete MIDI data is still rejected.
 
@@ -144,7 +148,7 @@ Your piano must support the same layout. Enable the game's 88-key mode before en
 
 ## Executor compatibility
 
-This version targets the common APIs used by Xeno-style executor environments. GUI initialization has been observed in Xeno; end-to-end piano playback remains unverified by the automated checks. Passing in one executor does not establish compatibility with every other executor.
+Project Real's documented `readfile` returns binary bytes, `listfiles` returns workspace-relative paths, and `keypress`/`keyrelease` accept Windows virtual-key numbers. The player uses those API signatures. Real's native key functions require Roblox to be the active window. See Real's [file API](https://docs.projectreal.gg/en/reference/filesystem/readfile) and [keyboard API](https://docs.projectreal.gg/en/reference/input/keypress). The same generic adapters retain Xeno support. Automated checks mock the documented API contracts; live Project Real piano playback has not been verified here.
 
 The default **Auto** backend prefers a dedicated VirtualInputManager when background playback is enabled or Xeno is detected. In other foreground sessions it uses `keypress` and `keyrelease` when both exist, or virtual input otherwise. It can fall back when the first native input call raises an error. A failed first virtual-input call can try the service object in Auto mode. **Test keys** checks for observed Roblox key events to help expose silent no-ops. Roblox documents VirtualInputManager as an internal service; access depends on the executor's permissions.
 
@@ -247,7 +251,7 @@ File/URL/Base64 loading is asynchronous. Wait until the UI reports that loading 
 
 ## Validation and source
 
-The parser/playback core passed 29 tests with the official Luau CLI. The full script passed 46 integration tests using mock Roblox services and executor APIs to check UI wiring, loading, input selection, proxy compatibility, input observation, BPM, background behavior, queues, file refresh, download cancellation, and cleanup. The GitHub entrypoint is also tested with mocked HTTP requests. The base64 loading path was checked with 14 real MIDI files, including files whose bytes are truncated by a simulated text-mode reader and `Queen - Bohemian Rhapsody.mid`. These are local checks; real game compatibility and visual behavior need an in-game run.
+The parser/playback core passed 31 tests with the official Luau CLI. The full script passed 49 integration tests using mock Roblox services and executor APIs to check UI wiring, loading, input selection, proxy compatibility, input observation, BPM, background behavior, queues, file refresh, download cancellation, Unicode filenames and cleanup. This includes direct binary loading under Thai paths with Real's documented API signatures and ASCII alias loading when native Unicode reads fail. Seven Python converter tests check byte preservation and executor selection. The GitHub entrypoint is also tested with mocked HTTP requests. The base64 loading path was checked with 14 real MIDI files, including files whose bytes are truncated by a simulated text-mode reader and `Queen - Bohemian Rhapsody.mid`. These are local checks; real game compatibility and visual behavior need an in-game run.
 
 To run the included parser and converter regressions locally:
 

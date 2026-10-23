@@ -16,6 +16,23 @@ spec.loader.exec_module(converter)
 
 
 class ConverterTests(unittest.TestCase):
+    def test_default_cli_prefers_real_and_explicit_xeno_remains_available(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            local = Path(temporary)
+            real, xeno = (local / name / "workspace/MIDIPlusPlus" for name in ("Real", "Xeno"))
+            for folder in (real, xeno):
+                folder.mkdir(parents=True)
+                (folder / "ดาวนำทาง.mid").write_bytes(b"MThd\0\x1a\xff")
+            env = dict(os.environ, LOCALAPPDATA=str(local), PYTHONIOENCODING="utf-8")
+            run = subprocess.run([sys.executable, str(ROOT / "Convert-MIDI.py")], capture_output=True, env=env)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertIn(b"Project Real", run.stdout)
+            self.assertTrue((real / "MIDIPlusPlus-files.txt").is_file())
+            self.assertFalse((xeno / "MIDIPlusPlus-files.txt").exists())
+            run = subprocess.run([sys.executable, str(ROOT / "Convert-MIDI.py"), "--executor", "xeno"], capture_output=True, env=env)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertTrue((xeno / "MIDIPlusPlus-files.txt").is_file())
+
     def test_thai_filenames_have_ascii_cache_paths_and_keep_exact_bytes(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "ดาวนำทาง - ไม่รักดีกว่า.mid"

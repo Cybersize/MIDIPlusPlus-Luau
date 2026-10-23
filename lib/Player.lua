@@ -27,7 +27,7 @@ end
 -- executor name/version is treated as a guarantee that key injection works.
 local virtualInput, virtualInputService, ownedVirtualInput
 pcall(function() virtualInputService = game:GetService("VirtualInputManager") end)
--- Xeno wraps `game` in a proxy. Native engine methods need a real Instance.
+-- Some executors wrap `game` in a proxy. Native engine methods need a real Instance.
 local inputTarget = Workspace.Parent or Workspace
 pcall(function() ownedVirtualInput = Instance.new("VirtualInputManager") end)
 virtualInput = ownedVirtualInput or virtualInputService
@@ -313,7 +313,7 @@ end
 
 local header = make("Frame", {Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1, Active = true}, window)
 label(header, "MIDI++", 22, 10, 140, 25, 23, colors.accent).Font = Enum.Font.GothamBold
-label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.6", 23, 37, 360, 16, 10, colors.muted)
+label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.7", 23, 37, 360, 16, 10, colors.muted)
 local backgroundButton = button(header, "", 365, 16, 174, 30)
 local function refreshBackgroundButton()
     backgroundButton.Text = backgroundPlayback and (backend:canBackground() and "Background: ON" or "Background: N/A")
@@ -982,7 +982,7 @@ if bool(Config.Hotkeys, true) then
     end))
 end
 
-local api = { Version = "1.0.6", InputBackend = function() return backend.name end }
+local api = { Version = "1.0.7", InputBackend = function() return backend.name end }
 function api:Destroy()
     if not alive then return end
     cancelStart()

@@ -1,7 +1,7 @@
 """Create ASCII base64 sidecars for executor bridges that cannot read binary MIDI.
 
 Usage: python Convert-MIDI.py [file.mid ... | folder ...]
-With no arguments, converts MIDI files in Xeno's normal MIDIPlusPlus folder.
+With no arguments, detects Project Real's workspace, then Xeno's as a fallback.
 Original MIDI files stay untouched. No files are uploaded or downloaded.
 SPDX-License-Identifier: GPL-3.0-only
 """
@@ -31,19 +31,21 @@ def convert_file(path):
 
 
 def main():
-    from midi_index import build_index
+    from midi_index import build_index, executor_target
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="backslashreplace")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("paths", nargs="*", help="MIDI files or folders")
+    parser.add_argument("--executor", choices=("real", "xeno"), help="Choose a conventional executor workspace explicitly")
     arguments = parser.parse_args()
     inputs = [Path(value) for value in arguments.paths]
     if not inputs:
-        local_app_data = os.environ.get("LOCALAPPDATA")
-        if not local_app_data:
-            parser.error("pass a MIDI file or folder")
-        inputs = [Path(local_app_data) / "Xeno" / "workspace" / "MIDIPlusPlus"]
+        name, folder = executor_target(arguments.executor)
+        if not folder.is_dir():
+            parser.error(f"{name}'s MIDIPlusPlus folder was not found at {folder}; pass your actual MIDI folder")
+        print(f"Using {name}: {folder}")
+        inputs = [folder]
     files, errors, changed, seen, folders = [], 0, 0, set(), set()
     for value in inputs:
         if value.is_dir():

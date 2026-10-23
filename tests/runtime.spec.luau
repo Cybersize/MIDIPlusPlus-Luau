@@ -186,7 +186,7 @@ end
 
 -- The build helper inserts the exact deliverable below, inside runScript().
 local function runScript()
--- MIDI++ Luau 1.0.6
+-- MIDI++ Luau 1.0.7
 -- SPDX-License-Identifier: GPL-3.0-only
 -- Piano layouts and velocity curves adapted from Zephkek/MIDIPlusPlus.
 -- https://github.com/Zephkek/MIDIPlusPlus
@@ -694,7 +694,7 @@ end
 -- executor name/version is treated as a guarantee that key injection works.
 local virtualInput, virtualInputService, ownedVirtualInput
 pcall(function() virtualInputService = game:GetService("VirtualInputManager") end)
--- Xeno wraps `game` in a proxy. Native engine methods need a real Instance.
+-- Some executors wrap `game` in a proxy. Native engine methods need a real Instance.
 local inputTarget = Workspace.Parent or Workspace
 pcall(function() ownedVirtualInput = Instance.new("VirtualInputManager") end)
 virtualInput = ownedVirtualInput or virtualInputService
@@ -980,7 +980,7 @@ end
 
 local header = make("Frame", {Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1, Active = true}, window)
 label(header, "MIDI++", 22, 10, 140, 25, 23, colors.accent).Font = Enum.Font.GothamBold
-label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.6", 23, 37, 360, 16, 10, colors.muted)
+label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.7", 23, 37, 360, 16, 10, colors.muted)
 local backgroundButton = button(header, "", 365, 16, 174, 30)
 local function refreshBackgroundButton()
     backgroundButton.Text = backgroundPlayback and (backend:canBackground() and "Background: ON" or "Background: N/A")
@@ -1649,7 +1649,7 @@ if bool(Config.Hotkeys, true) then
     end))
 end
 
-local api = { Version = "1.0.6", InputBackend = function() return backend.name end }
+local api = { Version = "1.0.7", InputBackend = function() return backend.name end }
 function api:Destroy()
     if not alive then return end
     cancelStart()
@@ -1929,8 +1929,9 @@ test("executor API failure falls back to VirtualInput", function()
     assert(api.InputBackend() == "VirtualInput" and count(physicallyDown) == 1)
     api:Stop(); assert(count(physicallyDown) == 0)
 end)
-test("native input accepts VK codes and releases on Destroy", function()
+test("Project Real native API contract accepts VK codes and releases on Destroy", function()
     api:Destroy()
+    executorIdentity = "Real"
     keypress = function(vk) assert(type(vk) == "number"); physicallyDown[vk] = true end
     keyrelease = function(vk) physicallyDown[vk] = nil end
     api = runScript(); findText("Load demo").Activated:Fire()
@@ -1938,6 +1939,7 @@ test("native input accepts VK codes and releases on Destroy", function()
     assert(physicallyDown[0x54])
     api:Destroy()
     assert(count(physicallyDown) == 0 and environment.MIDIPlusPlus == nil)
+    executorIdentity = "Mock executor"
 end)
 test("custom SendKey adapter and configuration", function()
     environment.MIDIPlusPlusConfig = {Full88Keys = true, Speed = 1.5, Transpose = -12, StartDelay = 0,
@@ -2258,6 +2260,25 @@ test("Thai names list and play through ASCII aliases when native listing and rea
     assert(api:Status().song == name and api:Status().duration == 5)
     failFileListing = false
     fileOverrides["MIDIPlusPlus/MIDIPlusPlus-files.txt"], fileOverrides[alias] = nil, nil
+end)
+
+test("Project Real file API contract loads native binary MIDI under a Thai path", function()
+    local listing = fileListing
+    executorIdentity = "Real"
+    newQueuePlayer()
+    local name = "ดาวนำทาง"
+    local path = "MIDIPlusPlus/" .. name .. ".mid"
+    fileListing = {path}
+    fileOverrides[path] = TestCore.decodeBase64("TVRoZAAAAAYAAAABAeBNVHJrAAAAsQD/AxBNSURJKysgTHVhdSBEZW1vAP9RAwehIACQPFqCaIA8AHj/AQAAkEBagmiAQAB4/wEAAJBDWoJogEMAeP8BAACQSFqCaIBIAHj/AQAAkENagmiAQwB4/wEAAJBAWoJogEAAeP8BAACQPlqCaIA+AHj/AQAAkEFagmiAQQB4/wEAALBAfwCQPGQAkEBkAJBDZACQSGSDYIA8AACAQAAAgEMAAIBIAINgsEAAAP8vAA==")
+    local paths = api:RefreshFiles()
+    assert(#paths == 1 and paths[1] == path and findButton(name))
+    findButton(name).Activated:Fire()
+    findText("Load").Activated:Fire()
+    assert(api:Status().song == name and api:Status().source == path and not api:Status().binarySafe)
+    api:Play(); flushTimers(); RunService.Heartbeat:Fire(0.1)
+    assert(api:Status().playing and count(physicallyDown) == 1)
+    api:Stop()
+    fileListing, fileOverrides[path], executorIdentity = listing, nil, "Mock executor"
 end)
 
 test("long Thai song names remain valid UTF-8 while the complete path is loaded", function()

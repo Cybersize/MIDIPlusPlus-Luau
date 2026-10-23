@@ -17,6 +17,16 @@ EXTENSIONS = {".mid", ".midi", ".rmi"}
 MAX_BYTES = 16 * 1024 * 1024
 
 
+def executor_target(executor=None):
+    """Find a conventional workspace, preferring Project Real when both exist."""
+    local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    choices = {"real": ("Project Real", local / "Real" / "workspace" / "MIDIPlusPlus"),
+               "xeno": ("Xeno", local / "Xeno" / "workspace" / "MIDIPlusPlus")}
+    if executor is not None:
+        return choices[executor]
+    return next((target for target in choices.values() if target[1].parent.is_dir()), choices["real"])
+
+
 def _write_if_changed(path, data):
     if path.is_file() and path.read_bytes() == data:
         return
