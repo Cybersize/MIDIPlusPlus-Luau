@@ -1,4 +1,4 @@
--- MIDI++ Luau 1.0.7
+-- MIDI++ Luau 1.0.8
 -- SPDX-License-Identifier: GPL-3.0-only
 -- Piano layouts and velocity curves adapted from Zephkek/MIDIPlusPlus.
 -- https://github.com/Zephkek/MIDIPlusPlus
@@ -493,6 +493,10 @@ local function finite(value) return type(value) == "number" and value == value a
 local function trim(value) return value:match("^%s*(.-)%s*$") end
 local function bool(value, default) if type(value) == "boolean" then return value end; return default end
 local backgroundPlayback = bool(Config.BackgroundPlayback, not bool(Config.PauseOnFocusLoss, false))
+local playWhileTyping = bool(Config.PlayWhileTyping, true)
+local function typingBlocksPlayback()
+    return not playWhileTyping and UserInputService:GetFocusedTextBox() ~= nil
+end
 local appHasFocus = true
 local function windowFocused()
     if type(isrbxactive) == "function" then
@@ -792,7 +796,7 @@ end
 
 local header = make("Frame", {Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1, Active = true}, window)
 label(header, "MIDI++", 22, 10, 140, 25, 23, colors.accent).Font = Enum.Font.GothamBold
-label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.7", 23, 37, 360, 16, 10, colors.muted)
+label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.8", 23, 37, 360, 16, 10, colors.muted)
 local backgroundButton = button(header, "", 365, 16, 174, 30)
 local function refreshBackgroundButton()
     backgroundButton.Text = backgroundPlayback and (backend:canBackground() and "Background: ON" or "Background: N/A")
@@ -869,6 +873,12 @@ local curveButton = button(body, "Curve: " .. Keyboard.curveName, 22, 385, 192, 
 local inputButton = button(body, "Input: " .. backend.mode, 222, 385, 192, 28)
 local testInputButton = button(body, "Test keys", 422, 385, 192, 28)
 label(body, "TRACKS", 22, 427, 180, 20, 11, colors.muted)
+local typingButton = button(body, "", 282, 422, 210, 25)
+local function refreshTypingButton()
+    typingButton.Text = "Play while typing: " .. (playWhileTyping and "ON" or "OFF")
+    typingButton.TextColor3 = playWhileTyping and colors.accent or colors.muted
+end
+refreshTypingButton()
 local resetTracks = button(body, "Reset tracks", 500, 422, 116, 25)
 local tracksFrame = make("ScrollingFrame", {Position = UDim2.fromOffset(22, 455), Size = UDim2.fromOffset(594, 70),
     BackgroundColor3 = colors.panel, BorderSizePixel = 0, CanvasSize = UDim2.fromOffset(0, 0),
@@ -1246,7 +1256,7 @@ startOrPause = function(delayOverride)
     if not player.song then status("Load a MIDI or add songs to the queue first.", true); return end
     if backend.name == "Unavailable" then status("No input backend is available in this executor.", true); return end
     local focused = UserInputService:GetFocusedTextBox()
-    if focused then focused:ReleaseFocus() end
+    if focused and not playWhileTyping then focused:ReleaseFocus() end
     cancelStart()
     local version = playVersion
     pendingPlay = true
@@ -1258,7 +1268,7 @@ startOrPause = function(delayOverride)
         if version ~= playVersion or not pendingPlay then return end
         pendingPlay = false
         if not maySendInput() then status("This Input needs Roblox focused. Choose virtual input for background playback.", true); return end
-        if UserInputService:GetFocusedTextBox() then status("Close the text box before playing.", true); return end
+        if typingBlocksPlayback() then status("Close the text box or enable Play while typing.", true); return end
         local ok, message = player:play()
         status(ok and ((not windowFocused() and "Playing in background / " or "Playing / ") .. backend.name) or message, not ok)
     end))
@@ -1266,6 +1276,24 @@ end
 local function stopPlayback()
     cancelStart(); cancelLoading(true); player:stop(); status("Stopped. Queue kept. All piano keys released.")
 end
+local function pauseForTyping()
+    if player.playing or pendingPlay or queueJob or (inputProbe and inputProbe.running) then
+        cancelStart(); cancelLoading(true); player:pause(); status("Paused while typing in Roblox. Enable Play while typing to continue.")
+        return true
+    end
+    return false
+end
+local function setPlayWhileTyping(enabled)
+    assert(type(enabled) == "boolean", "PlayWhileTyping must be true or false")
+    playWhileTyping = enabled
+    refreshTypingButton()
+    if not (typingBlocksPlayback() and pauseForTyping()) then
+        status(enabled and "Play while typing ON. Text boxes will not pause playback."
+            or "Play while typing OFF. Text boxes pause playback.")
+    end
+    return enabled
+end
+connect(typingButton.Activated, safely(function() setPlayWhileTyping(not playWhileTyping) end))
 local function setBackend(mode)
     cancelStart()
     cancelLoading(true)
@@ -1315,7 +1343,7 @@ local function testInput()
     player:pause()
     if backend.name == "Unavailable" then status("No keyboard input backend is available.", true); return end
     local focused = UserInputService:GetFocusedTextBox()
-    if focused then focused:ReleaseFocus() end
+    if focused and not playWhileTyping then focused:ReleaseFocus() end
     local probe = {running = true, cancelled = false, observed = {}, expected = {}, sent = 0,
         received = 0, processed = 0, backend = backend.name}
     inputProbe = probe
@@ -1329,8 +1357,8 @@ local function testInput()
         if not maySendInput() then
             cancelStart(); status("This Input needs Roblox focused; enable Background with virtual input.", true); return
         end
-        if UserInputService:GetFocusedTextBox() then
-            cancelStart(); status("Test cancelled: close the text box and try again.", true); return
+        if typingBlocksPlayback() then
+            cancelStart(); status("Test cancelled: close the text box or enable Play while typing.", true); return
         end
         local info = describeKey(keys[index])
         probe.expected[info.code] = true
@@ -1434,9 +1462,7 @@ connect(UserInputService.InputChanged, function(input)
 end)
 connect(UserInputService.InputEnded, function(input) if input == dragInput then dragInput = nil end end)
 connect(UserInputService.TextBoxFocused, safely(function()
-    if player.playing or pendingPlay or queueJob or (inputProbe and inputProbe.running) then
-        cancelStart(); cancelLoading(true); player:pause(); status("Paused while typing in Roblox. Press Play to resume.")
-    end
+    if not playWhileTyping then pauseForTyping() end
 end))
 connect(UserInputService.WindowFocused, function() appHasFocus = true end)
 connect(UserInputService.WindowFocusReleased, safely(function()
@@ -1461,7 +1487,7 @@ if bool(Config.Hotkeys, true) then
     end))
 end
 
-local api = { Version = "1.0.7", InputBackend = function() return backend.name end }
+local api = { Version = "1.0.8", InputBackend = function() return backend.name end }
 function api:Destroy()
     if not alive then return end
     cancelStart()
@@ -1483,6 +1509,7 @@ function api:Stop() if alive then stopPlayback() end end
 function api:SetBackend(mode) assert(alive, "Player was destroyed"); return setBackend(mode) end
 function api:TestInput() assert(alive, "Player was destroyed"); testInput() end
 function api:SetBackgroundPlayback(enabled) assert(alive, "Player was destroyed"); return setBackgroundPlayback(enabled) end
+function api:SetPlayWhileTyping(enabled) assert(alive, "Player was destroyed"); return setPlayWhileTyping(enabled) end
 function api:Seek(seconds) assert(alive and finite(seconds), "Seek expects a finite number"); player:seek(seconds) end
 function api:SetSpeed(speed) assert(alive, "Player was destroyed"); setSpeed(speed) end
 function api:SetTranspose(semitones) assert(alive, "Player was destroyed"); setTranspose(semitones) end
@@ -1529,6 +1556,7 @@ function api:Status()
         source = loadedSource and loadedSource.path or nil, binarySafe = loadedSource and loadedSource.binarySafe or false,
         midiBpm = midiBpm, bpm = midiBpm and midiBpm * player.speed or nil, inputMode = backend.mode,
         backgroundPlayback = backgroundPlayback, backgroundCapable = backend:canBackground(),
+        playWhileTyping = playWhileTyping,
         sentDown = backend.sentDown, sentUp = backend.sentUp,
         inputTest = inputProbe and {running = inputProbe.running, cancelled = inputProbe.cancelled,
             sent = inputProbe.sent, received = inputProbe.received, processed = inputProbe.processed, backend = inputProbe.backend} or nil }

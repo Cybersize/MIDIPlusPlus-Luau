@@ -96,7 +96,18 @@ local UserInputService = {
     InputBegan = signal(), InputChanged = signal(), InputEnded = signal(),
     TextBoxFocused = signal(), WindowFocusReleased = signal(), WindowFocused = signal(),
 }
-function UserInputService:GetFocusedTextBox() return nil end
+local focusedTextBox, releasedTextBoxes = nil, 0
+function UserInputService:GetFocusedTextBox() return focusedTextBox end
+local function focusMockTextBox()
+    local editor = {}
+    function editor:ReleaseFocus()
+        releasedTextBoxes = releasedTextBoxes + 1
+        if focusedTextBox == self then focusedTextBox = nil end
+    end
+    focusedTextBox = editor
+    UserInputService.TextBoxFocused:Fire(editor)
+    return editor
+end
 local RunService = {Heartbeat = signal()}
 local Workspace = Instance.new("Workspace")
 Workspace.Parent = root
@@ -186,7 +197,7 @@ end
 
 -- The build helper inserts the exact deliverable below, inside runScript().
 local function runScript()
--- MIDI++ Luau 1.0.7
+-- MIDI++ Luau 1.0.8
 -- SPDX-License-Identifier: GPL-3.0-only
 -- Piano layouts and velocity curves adapted from Zephkek/MIDIPlusPlus.
 -- https://github.com/Zephkek/MIDIPlusPlus
@@ -681,6 +692,10 @@ local function finite(value) return type(value) == "number" and value == value a
 local function trim(value) return value:match("^%s*(.-)%s*$") end
 local function bool(value, default) if type(value) == "boolean" then return value end; return default end
 local backgroundPlayback = bool(Config.BackgroundPlayback, not bool(Config.PauseOnFocusLoss, false))
+local playWhileTyping = bool(Config.PlayWhileTyping, true)
+local function typingBlocksPlayback()
+    return not playWhileTyping and UserInputService:GetFocusedTextBox() ~= nil
+end
 local appHasFocus = true
 local function windowFocused()
     if type(isrbxactive) == "function" then
@@ -980,7 +995,7 @@ end
 
 local header = make("Frame", {Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1, Active = true}, window)
 label(header, "MIDI++", 22, 10, 140, 25, 23, colors.accent).Font = Enum.Font.GothamBold
-label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.7", 23, 37, 360, 16, 10, colors.muted)
+label(header, "LUAU  /  VIRTUAL PIANO  /  1.0.8", 23, 37, 360, 16, 10, colors.muted)
 local backgroundButton = button(header, "", 365, 16, 174, 30)
 local function refreshBackgroundButton()
     backgroundButton.Text = backgroundPlayback and (backend:canBackground() and "Background: ON" or "Background: N/A")
@@ -1057,6 +1072,12 @@ local curveButton = button(body, "Curve: " .. Keyboard.curveName, 22, 385, 192, 
 local inputButton = button(body, "Input: " .. backend.mode, 222, 385, 192, 28)
 local testInputButton = button(body, "Test keys", 422, 385, 192, 28)
 label(body, "TRACKS", 22, 427, 180, 20, 11, colors.muted)
+local typingButton = button(body, "", 282, 422, 210, 25)
+local function refreshTypingButton()
+    typingButton.Text = "Play while typing: " .. (playWhileTyping and "ON" or "OFF")
+    typingButton.TextColor3 = playWhileTyping and colors.accent or colors.muted
+end
+refreshTypingButton()
 local resetTracks = button(body, "Reset tracks", 500, 422, 116, 25)
 local tracksFrame = make("ScrollingFrame", {Position = UDim2.fromOffset(22, 455), Size = UDim2.fromOffset(594, 70),
     BackgroundColor3 = colors.panel, BorderSizePixel = 0, CanvasSize = UDim2.fromOffset(0, 0),
@@ -1434,7 +1455,7 @@ startOrPause = function(delayOverride)
     if not player.song then status("Load a MIDI or add songs to the queue first.", true); return end
     if backend.name == "Unavailable" then status("No input backend is available in this executor.", true); return end
     local focused = UserInputService:GetFocusedTextBox()
-    if focused then focused:ReleaseFocus() end
+    if focused and not playWhileTyping then focused:ReleaseFocus() end
     cancelStart()
     local version = playVersion
     pendingPlay = true
@@ -1446,7 +1467,7 @@ startOrPause = function(delayOverride)
         if version ~= playVersion or not pendingPlay then return end
         pendingPlay = false
         if not maySendInput() then status("This Input needs Roblox focused. Choose virtual input for background playback.", true); return end
-        if UserInputService:GetFocusedTextBox() then status("Close the text box before playing.", true); return end
+        if typingBlocksPlayback() then status("Close the text box or enable Play while typing.", true); return end
         local ok, message = player:play()
         status(ok and ((not windowFocused() and "Playing in background / " or "Playing / ") .. backend.name) or message, not ok)
     end))
@@ -1454,6 +1475,24 @@ end
 local function stopPlayback()
     cancelStart(); cancelLoading(true); player:stop(); status("Stopped. Queue kept. All piano keys released.")
 end
+local function pauseForTyping()
+    if player.playing or pendingPlay or queueJob or (inputProbe and inputProbe.running) then
+        cancelStart(); cancelLoading(true); player:pause(); status("Paused while typing in Roblox. Enable Play while typing to continue.")
+        return true
+    end
+    return false
+end
+local function setPlayWhileTyping(enabled)
+    assert(type(enabled) == "boolean", "PlayWhileTyping must be true or false")
+    playWhileTyping = enabled
+    refreshTypingButton()
+    if not (typingBlocksPlayback() and pauseForTyping()) then
+        status(enabled and "Play while typing ON. Text boxes will not pause playback."
+            or "Play while typing OFF. Text boxes pause playback.")
+    end
+    return enabled
+end
+connect(typingButton.Activated, safely(function() setPlayWhileTyping(not playWhileTyping) end))
 local function setBackend(mode)
     cancelStart()
     cancelLoading(true)
@@ -1503,7 +1542,7 @@ local function testInput()
     player:pause()
     if backend.name == "Unavailable" then status("No keyboard input backend is available.", true); return end
     local focused = UserInputService:GetFocusedTextBox()
-    if focused then focused:ReleaseFocus() end
+    if focused and not playWhileTyping then focused:ReleaseFocus() end
     local probe = {running = true, cancelled = false, observed = {}, expected = {}, sent = 0,
         received = 0, processed = 0, backend = backend.name}
     inputProbe = probe
@@ -1517,8 +1556,8 @@ local function testInput()
         if not maySendInput() then
             cancelStart(); status("This Input needs Roblox focused; enable Background with virtual input.", true); return
         end
-        if UserInputService:GetFocusedTextBox() then
-            cancelStart(); status("Test cancelled: close the text box and try again.", true); return
+        if typingBlocksPlayback() then
+            cancelStart(); status("Test cancelled: close the text box or enable Play while typing.", true); return
         end
         local info = describeKey(keys[index])
         probe.expected[info.code] = true
@@ -1622,9 +1661,7 @@ connect(UserInputService.InputChanged, function(input)
 end)
 connect(UserInputService.InputEnded, function(input) if input == dragInput then dragInput = nil end end)
 connect(UserInputService.TextBoxFocused, safely(function()
-    if player.playing or pendingPlay or queueJob or (inputProbe and inputProbe.running) then
-        cancelStart(); cancelLoading(true); player:pause(); status("Paused while typing in Roblox. Press Play to resume.")
-    end
+    if not playWhileTyping then pauseForTyping() end
 end))
 connect(UserInputService.WindowFocused, function() appHasFocus = true end)
 connect(UserInputService.WindowFocusReleased, safely(function()
@@ -1649,7 +1686,7 @@ if bool(Config.Hotkeys, true) then
     end))
 end
 
-local api = { Version = "1.0.7", InputBackend = function() return backend.name end }
+local api = { Version = "1.0.8", InputBackend = function() return backend.name end }
 function api:Destroy()
     if not alive then return end
     cancelStart()
@@ -1671,6 +1708,7 @@ function api:Stop() if alive then stopPlayback() end end
 function api:SetBackend(mode) assert(alive, "Player was destroyed"); return setBackend(mode) end
 function api:TestInput() assert(alive, "Player was destroyed"); testInput() end
 function api:SetBackgroundPlayback(enabled) assert(alive, "Player was destroyed"); return setBackgroundPlayback(enabled) end
+function api:SetPlayWhileTyping(enabled) assert(alive, "Player was destroyed"); return setPlayWhileTyping(enabled) end
 function api:Seek(seconds) assert(alive and finite(seconds), "Seek expects a finite number"); player:seek(seconds) end
 function api:SetSpeed(speed) assert(alive, "Player was destroyed"); setSpeed(speed) end
 function api:SetTranspose(semitones) assert(alive, "Player was destroyed"); setTranspose(semitones) end
@@ -1717,6 +1755,7 @@ function api:Status()
         source = loadedSource and loadedSource.path or nil, binarySafe = loadedSource and loadedSource.binarySafe or false,
         midiBpm = midiBpm, bpm = midiBpm and midiBpm * player.speed or nil, inputMode = backend.mode,
         backgroundPlayback = backgroundPlayback, backgroundCapable = backend:canBackground(),
+        playWhileTyping = playWhileTyping,
         sentDown = backend.sentDown, sentUp = backend.sentUp,
         inputTest = inputProbe and {running = inputProbe.running, cancelled = inputProbe.cancelled,
             sent = inputProbe.sent, received = inputProbe.received, processed = inputProbe.processed, backend = inputProbe.backend} or nil }
@@ -1755,6 +1794,8 @@ end
 test("entire script initializes and demo loads", function()
     local api = runScript()
     assert(environment.MIDIPlusPlus == api and api.InputBackend() == "VirtualInput")
+    assert(api.Version == "1.0.8" and api:Status().playWhileTyping)
+    assert(findButton("Play while typing: ON"))
     findText("Load demo").Activated:Fire()
     assert(api:Status().duration == 5)
     assert(findText("01  MIDI++ Luau Demo  (12 notes)"))
@@ -1821,12 +1862,74 @@ test("play, pause, resume and stop clear physical keys", function()
     api:Play(); flushTimers(); assert(count(physicallyDown) == 1)
     api:Stop(); assert(count(physicallyDown) == 0 and api:Status().position == 0)
 end)
-test("typing and focus loss pause and release keys", function()
+test("typing keeps playback running and panic releases keys without stealing editor focus", function()
     api:Play(); flushTimers(); RunService.Heartbeat:Fire(0.1)
-    UserInputService.TextBoxFocused:Fire({})
+    local before, releases = api:Status().position, releasedTextBoxes
+    local editor = focusMockTextBox()
+    RunService.Heartbeat:Fire(0.1)
+    assert(api:Status().playing and api:Status().position > before and count(physicallyDown) == 1)
+    assert(UserInputService:GetFocusedTextBox() == editor and releasedTextBoxes == releases)
+    UserInputService.InputBegan:Fire({KeyCode = Enum.KeyCode.F4}, true)
+    assert(not api:Status().playing and count(physicallyDown) == 0)
+    focusedTextBox = nil
+end)
+
+test("play countdown survives typing and can restart with an editor already focused", function()
+    local releases = releasedTextBoxes
+    api:Play()
+    local editor = focusMockTextBox()
+    assert(api:Status().pending)
+    flushTimers(); RunService.Heartbeat:Fire(0.1)
+    assert(api:Status().playing and count(physicallyDown) == 1)
+    api:Stop(); api:Play(); flushTimers(); RunService.Heartbeat:Fire(0.1)
+    assert(api:Status().playing and UserInputService:GetFocusedTextBox() == editor)
+    assert(releasedTextBoxes == releases)
+    api:Stop(); focusedTextBox = nil
+end)
+
+test("key test finishes with another script textbox focused", function()
+    local releases = releasedTextBoxes
+    focusMockTextBox(); api:TestInput(); flushTimers()
+    local editor = focusMockTextBox()
+    for _ = 1, 8 do flushTimers() end
+    local result = api:Status().inputTest
+    assert(not result.running and not result.cancelled and result.sent == 3 and result.received == 3)
+    assert(count(physicallyDown) == 0 and UserInputService:GetFocusedTextBox() == editor)
+    assert(releasedTextBoxes == releases)
+    focusedTextBox = nil
+end)
+
+test("typing toggle pauses immediately when disabled and API updates its button", function()
+    api:Play(); flushTimers(); RunService.Heartbeat:Fire(0.1); focusMockTextBox()
+    findButton("Play while typing: ON").Activated:Fire()
+    assert(not api:Status().playWhileTyping and not api:Status().playing and count(physicallyDown) == 0)
+    assert(findButton("Play while typing: OFF"))
+    api:SetPlayWhileTyping(true)
+    assert(api:Status().playWhileTyping and findButton("Play while typing: ON"))
+    assert(not api:Status().playing, "Changing the option must not start a song")
+    focusedTextBox = nil
+end)
+
+test("disabled typing option cancels countdowns and key tests", function()
+    api:SetPlayWhileTyping(false); api:Play(); focusMockTextBox()
+    assert(not api:Status().pending)
+    flushTimers(); assert(not api:Status().playing and count(physicallyDown) == 0)
+    api:TestInput(); flushTimers()
+    assert(count(physicallyDown) == 1)
+    focusMockTextBox()
+    for _ = 1, 8 do flushTimers() end
+    assert(api:Status().inputTest.cancelled and count(physicallyDown) == 0)
+    focusedTextBox = nil; api:SetPlayWhileTyping(true)
+end)
+
+test("opt-in typing pause and focus loss release keys", function()
+    api:SetPlayWhileTyping(false)
+    api:Play(); flushTimers(); RunService.Heartbeat:Fire(0.1)
+    focusMockTextBox()
     assert(not api:Status().playing and count(physicallyDown) == 0)
     api:Play(); flushTimers(); UserInputService.WindowFocusReleased:Fire()
     assert(not api:Status().playing and count(physicallyDown) == 0)
+    api:SetPlayWhileTyping(true)
 end)
 test("UI track mute and solo update playback", function()
     api:Stop(); api:Play(); flushTimers(); RunService.Heartbeat:Fire(0.1)
@@ -2053,6 +2156,7 @@ end)
 local function newQueuePlayer(config)
     if api then api:Destroy() end
     environment.MIDIPlusPlusConfig = config or {}
+    focusedTextBox = nil
     appActive, holdHttp = true, false
     keypress, keyrelease = nil, nil
     fileData, httpData = TestCore.decodeBase64("TVRoZAAAAAYAAAABAeBNVHJrAAAAsQD/AxBNSURJKysgTHVhdSBEZW1vAP9RAwehIACQPFqCaIA8AHj/AQAAkEBagmiAQAB4/wEAAJBDWoJogEMAeP8BAACQSFqCaIBIAHj/AQAAkENagmiAQwB4/wEAAJBAWoJogEAAeP8BAACQPlqCaIA+AHj/AQAAkEFagmiAQQB4/wEAALBAfwCQPGQAkEBkAJBDZACQSGSDYIA8AACAQAAAgEMAAIBIAINgsEAAAP8vAA=="), TestCore.decodeBase64("TVRoZAAAAAYAAAABAeBNVHJrAAAAsQD/AxBNSURJKysgTHVhdSBEZW1vAP9RAwehIACQPFqCaIA8AHj/AQAAkEBagmiAQAB4/wEAAJBDWoJogEMAeP8BAACQSFqCaIBIAHj/AQAAkENagmiAQwB4/wEAAJBAWoJogEAAeP8BAACQPlqCaIA+AHj/AQAAkEFagmiAQQB4/wEAALBAfwCQPGQAkEBkAJBDZACQSGSDYIA8AACAQAAAgEMAAIBIAINgsEAAAP8vAA==")
@@ -2221,16 +2325,34 @@ test("RemoveQueued cancels a downloading entry and leaves the following songs", 
     api:Next(); flushTimers(); assert(api:Status().playing and api:Status().song == "Base64 MIDI")
 end)
 
-test("typing pauses a queued download while background focus loss can keep it running", function()
-    newQueuePlayer(); api:EnqueueURL("https://example.test/song.mid")
+test("typing preserves queued downloads and automatic next-song playback", function()
+    newQueuePlayer()
+    api:EnqueueURL("https://example.test/song.mid"); api:EnqueueBase64("TVRoZAAAAAYAAAABAeBNVHJrAAAAsQD/AxBNSURJKysgTHVhdSBEZW1vAP9RAwehIACQPFqCaIA8AHj/AQAAkEBagmiAQAB4/wEAAJBDWoJogEMAeP8BAACQSFqCaIBIAHj/AQAAkENagmiAQwB4/wEAAJBAWoJogEAAeP8BAACQPlqCaIA+AHj/AQAAkEFagmiAQQB4/wEAALBAfwCQPGQAkEBkAJBDZACQSGSDYIA8AACAQAAAgEMAAIBIAINgsEAAAP8vAA==")
+    local releases = releasedTextBoxes
+    holdHttp = true; api:Next()
+    local editor = focusMockTextBox()
+    assert(api:Status().queueLoading and api:Status().queueCount == 2)
+    holdHttp = false; flushHttp(); flushTimers(); RunService.Heartbeat:Fire(0.1)
+    assert(api:Status().playing and api:Status().queueCount == 1)
+    finishSong(); assert(api:Status().pending)
+    flushTimers(); RunService.Heartbeat:Fire(0.1)
+    assert(api:Status().playing and api:Status().song == "Base64 MIDI" and api:Status().queueCount == 0)
+    assert(UserInputService:GetFocusedTextBox() == editor and releasedTextBoxes == releases)
+    api:Stop(); focusedTextBox = nil
+end)
+
+test("typing can pause queued downloads when disabled while background focus loss keeps them running", function()
+    newQueuePlayer({PlayWhileTyping = false}); api:EnqueueURL("https://example.test/song.mid")
+    assert(not api:Status().playWhileTyping and findButton("Play while typing: OFF"))
     holdHttp = true; api:Next()
     appActive = false; UserInputService.WindowFocusReleased:Fire()
     assert(api:Status().queueLoading)
-    UserInputService.TextBoxFocused:Fire({})
+    focusMockTextBox()
     assert(not api:Status().loading and api:Status().queueCount == 1)
     holdHttp = false; flushHttp(); flushTimers()
     assert(not api:Status().playing)
     appActive = true; UserInputService.WindowFocused:Fire()
+    focusedTextBox = nil
 end)
 
 test("Destroy invalidates a queued download and clears its connections", function()
